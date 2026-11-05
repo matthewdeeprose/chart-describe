@@ -124,6 +124,10 @@
   // author can make, and far above the error that one binary sum leaves.
   const HALF_TOLERANCE = 1e-9;
 
+  // The most decimal places the series average is tried at. Any value typed
+  // with fewer places stops the search long before this.
+  const MEAN_MAX_PLACES = 15;
+
   // Where the renderer draws a value that it clamps. A value above the maximum
   // is drawn at the maximum's radius. A value below the minimum is drawn at
   // radius zero.
@@ -574,18 +578,51 @@
    * whole number exactly when the decimal mean is a half; the exact halves
    * (2 and 3, 1.5 and 3.5) take the same branch and still give 3.
    *
+   * THE AVERAGE NEVER LIES OUTSIDE THE SERIES' OWN VALUES. The mean is rounded
+   * to a whole number first. If that falls below the lowest value or above
+   * the highest (inclusive), it is rounded to one decimal place, then two, and
+   * so on; the first result inside the values is used. Equal values take the
+   * same path: the mean equals the value, so the search stops at the value.
+   *
    * @param {number[]} values - A series' values
    * @returns {number} The rounded mean
    */
   function roundedMean(values) {
     const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
-    const magnitude = Math.abs(mean);
+    const lowest = Math.min(...values);
+    const highest = Math.max(...values);
+
+    // Whole number first; then one decimal place, two, and so on, until the
+    // result lies inside the series' own values (inclusive).
+    let rounded = 0;
+    for (let places = 0; places <= MEAN_MAX_PLACES; places += 1) {
+      rounded = roundHalfAwayFromZero(mean, places);
+      if (rounded >= lowest && rounded <= highest) return rounded;
+    }
+
+    // Reached only when the values need more than MEAN_MAX_PLACES decimal
+    // places to be matched; the nearest value inside the series is used.
+    return Math.min(Math.max(rounded, lowest), highest);
+  }
+
+  /**
+   * A number rounded to a count of decimal places, halves away from zero.
+   * The half test is the one described on `roundedMean`, applied to the mean
+   * scaled by ten to the power of the places. A result of -0 is returned as 0.
+   *
+   * @param {number} mean - The number to round
+   * @param {number} places - Decimal places to keep (0 for a whole number)
+   * @returns {number} The rounded number
+   */
+  function roundHalfAwayFromZero(mean, places) {
+    const scale = 10 ** places;
+    const magnitude = Math.abs(mean) * scale;
     const twice = magnitude * 2;
     const nearestTwice = Math.round(twice);
     const isHalf =
       Math.abs(twice - nearestTwice) < HALF_TOLERANCE && nearestTwice % 2 === 1;
     const roundedMagnitude = isHalf ? (nearestTwice + 1) / 2 : Math.round(magnitude);
-    const rounded = Math.sign(mean) * roundedMagnitude;
+    const rounded = (Math.sign(mean) * roundedMagnitude) / scale;
     return rounded === 0 ? 0 : rounded;
   }
 
