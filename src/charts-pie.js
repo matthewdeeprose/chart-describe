@@ -124,6 +124,10 @@
   // authored decimals carries floating-point noise (1/3 of 0.3 is not 0.1).
   const FRACTION_TOLERANCE = 1e-9;
   const SIGNIFICANT_DIGITS = 12;
+  // A total with a whole part this long needs more digits to keep its fraction.
+  // Float noise from adding values sits beyond the fifteenth digit.
+  const LARGE_TOTAL_WHOLE_DIGITS = 12;
+  const LARGE_TOTAL_DIGITS = 15;
   // A share that prints as 0.0% but is above zero reads as this instead.
   const BELOW_ONE_TENTH = "less than 0.1%";
 
@@ -134,13 +138,29 @@
 
   /**
    * A total with float noise removed: twelve significant digits, unless it is
-   * a whole number below 2^53, which is exact already.
+   * a whole number below 2^53, which is exact already. A total with twelve or
+   * more whole digits keeps fifteen, so its fraction survives.
    */
   function cleanTotal(total) {
     if (Number.isInteger(total) && Math.abs(total) < Number.MAX_SAFE_INTEGER) {
       return total;
     }
-    return Number(total.toPrecision(SIGNIFICANT_DIGITS));
+    const wholeDigits = String(Math.trunc(Math.abs(total))).length;
+    const digits =
+      wholeDigits >= LARGE_TOTAL_WHOLE_DIGITS
+        ? LARGE_TOTAL_DIGITS
+        : SIGNIFICANT_DIGITS;
+    return Number(total.toPrecision(digits));
+  }
+
+  /** True when any segment is below zero, so its share of a pie has no meaning. */
+  function hasNegativeValue(segments) {
+    return segments.some((segment) => segment.value < 0);
+  }
+
+  /** True when shares can be stated: no negative value, and a total above zero. */
+  function sharesAreStated(segments, total) {
+    return total > 0 && !hasNegativeValue(segments);
   }
 
   /**
@@ -243,6 +263,9 @@
   const ZERO_SENTENCE =
     "Every value is zero, so no segment is larger than another.";
 
+  const NEGATIVE_SENTENCE =
+    "Some values are negative, so shares are not given.";
+
   /**
    * The sentence that names the largest segment(s), as runs. This is the one
    * place the short description and the Key Insights read from, so they
@@ -251,6 +274,7 @@
    */
   function largestSentence(segments, total) {
     const { text, term } = modelCore();
+    if (hasNegativeValue(segments)) return [text(NEGATIVE_SENTENCE)];
     if (total === 0) return [text(ZERO_SENTENCE)];
 
     const ties = readTies(segments);
@@ -387,7 +411,7 @@
     // Largest and smallest segments. When every value is zero there are no
     // percentages to narrate; when every slice is equal the primary insight
     // has said so, and a largest and a smallest line would contradict it.
-    if (segments.length > 0 && total > 0) {
+    if (segments.length > 0 && sharesAreStated(segments, total)) {
       const ties = readTies(segments);
       if (!ties.allEqual) {
         insightItems.push(
@@ -399,13 +423,14 @@
 
     // 4. Complete Data Points: every segment with its value, and its
     // percentage unless every value is zero (there is no share to state).
+    const statesShares = sharesAreStated(segments, total);
     const dataItems = segments.map((segment) =>
       item(
         [
           segmentLabel(segment),
           text(": "),
           term("value", [text(formatValue(segment.value))]),
-          ...(total > 0
+          ...(statesShares
             ? [
                 text(" ("),
                 term("percentage", [
@@ -436,7 +461,7 @@
 
     // The pattern section needs enough segments to identify patterns, and a
     // total to state them against
-    if (segments.length >= 3 && total > 0) {
+    if (segments.length >= 3 && statesShares) {
       logDebug(
         "Generating pattern analysis for " + segments.length + " segments"
       );
