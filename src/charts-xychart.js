@@ -248,6 +248,22 @@
   const SHORT_TIER_MAX_DECIMALS = 4;
   const SHORT_TIER_ROUNDING = 2;
 
+  // The most decimals that a rounded value may be given back to keep it true
+  // (an average inside the range, a range whose two ends differ).
+  const MAX_RESTORED_DECIMALS = 15;
+
+  // Two series averages that agree to this many significant figures are equal.
+  const MEAN_COMPARE_DIGITS = 12;
+
+  // A bare four-digit label is called a year only inside this span. A run such
+  // as 1000, 2000, 3000 is a set of bins, and the neutral noun is the true one.
+  const YEAR_LABEL_MIN = 1800;
+  const YEAR_LABEL_MAX = 2200;
+
+  // The days and months that a dotted, slashed or hyphenated date can hold.
+  const DATE_DAY_MAX = 31;
+  const DATE_MONTH_MAX = 12;
+
   // The noun that a COUNT OF VALUES takes, so that the mismatch sentence reads
   // "one value" and not "one values". It goes through `countedNoun`, so the
   // choice of singular or plural stays in one place.
@@ -319,6 +335,42 @@
     "(?:january|february|march|april|may|june|july|august|september|october|" +
     "november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)";
 
+  /**
+   * A split year: two years in a row, such as 2020-21, 2020/21 or 2020-2021.
+   * The second year must follow the first, so 2024-01 (a month) is not one.
+   * @param {string} lower - A label, lower-cased
+   * @returns {boolean} True when the label is a split year
+   */
+  function isSplitYear(lower) {
+    const found = /^(\d{4})[-/](\d{2}(?:\d{2})?)$/.exec(lower);
+    if (!found) return false;
+    const first = Number(found[1]);
+    const second = Number(found[2]);
+    const next = found[2].length === 2 ? (first + 1) % 100 : first + 1;
+    return second === next;
+  }
+
+  /**
+   * A numeric date such as 3/4/24, 03-04-2024 or 3.4.2024. The day and the
+   * month must be possible. A dotted date needs a four-digit year, because
+   * 1.2.10 is as likely to be a version number as a date.
+   * @param {string} lower - A label, lower-cased
+   * @returns {boolean} True when the label reads as a numeric date
+   */
+  function isNumericDate(lower) {
+    const found = /^(\d{1,2})([/\-.])(\d{1,2})([/\-.])(\d{2}(?:\d{2})?)$/.exec(
+      lower
+    );
+    if (!found) return false;
+    const first = Number(found[1]);
+    const second = Number(found[3]);
+    if (first < 1 || second < 1) return false;
+    if (first > DATE_DAY_MAX || second > DATE_DAY_MAX) return false;
+    if (Math.min(first, second) > DATE_MONTH_MAX) return false;
+    const dotted = found[2] === "." || found[4] === ".";
+    return !dotted || found[5].length === 4;
+  }
+
   const LABEL_SHAPES = Object.freeze([
     {
       singular: "Day",
@@ -374,8 +426,7 @@
       test: (label) => {
         const lower = label.toLowerCase();
         if (/^\d{4}-\d{2}-\d{2}$/.test(lower)) return true;
-        if (/^\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2}(?:\d{2})?$/.test(lower))
-          return true;
+        if (isNumericDate(lower)) return true;
         return new RegExp(
           `^\\d{1,2}\\s${MONTH_ALTERNATION}(?:\\s\\d{2}(?:\\d{2})?)?$`
         ).test(lower);
@@ -387,8 +438,11 @@
       test: (label) => {
         const lower = label.toLowerCase();
         // Plain, split (2020-21, 2020/21, 2020-2021) and financial years.
-        if (/^\d{4}$/.test(lower)) return true;
-        if (/^\d{4}[-/]\d{2}(?:\d{2})?$/.test(lower)) return true;
+        if (/^\d{4}$/.test(lower)) {
+          const year = Number(lower);
+          return year >= YEAR_LABEL_MIN && year <= YEAR_LABEL_MAX;
+        }
+        if (isSplitYear(lower)) return true;
         if (/^fy\s?\d{2}(?:\d{2})?(?:[-/]\d{2}(?:\d{2})?)?$/.test(lower))
           return true;
         return false;
@@ -475,7 +529,40 @@
     const point = text.indexOf(".");
     if (point === -1) return text;
     if (text.length - point - 1 <= SHORT_TIER_MAX_DECIMALS) return text;
-    return `about ${value.toFixed(SHORT_TIER_ROUNDING)}`;
+    const rounded = value.toFixed(SHORT_TIER_ROUNDING);
+    // A value that is not zero must not round to zero: keep two significant
+    // figures instead (0.00001 is "about 0.00001", not "about 0.00").
+    if (value !== 0 && Number(rounded) === 0) {
+      return `about ${dropTrailingZeros(value.toPrecision(2))}`;
+    }
+    return `about ${rounded}`;
+  }
+
+  /**
+   * The two ends of a range as a tier speaks them. In the short tier two
+   * different values never come out as the same text: where rounding would
+   * make them equal, decimals are added until they differ.
+   * @param {string} tier - A TIERS member
+   * @param {number} min - The lowest value
+   * @param {number} max - The highest value
+   * @returns {Object} `{ min, max }`, both as text
+   */
+  function formatRangeEndsForTier(tier, min, max) {
+    const ends = {
+      min: formatAuthorValueForTier(tier, min),
+      max: formatAuthorValueForTier(tier, max),
+    };
+    if (tier !== TIERS.SHORT || ends.min !== ends.max || min === max) {
+      return ends;
+    }
+    for (let decimals = SHORT_TIER_ROUNDING + 1; decimals <= MAX_RESTORED_DECIMALS; decimals += 1) {
+      const lowText = dropTrailingZeros(min.toFixed(decimals));
+      const highText = dropTrailingZeros(max.toFixed(decimals));
+      if (lowText !== highText) {
+        return { min: `about ${lowText}`, max: `about ${highText}` };
+      }
+    }
+    return { min: String(min), max: String(max) };
   }
 
   /**
@@ -524,6 +611,31 @@
   function dropTrailingZeros(banded) {
     if (banded.indexOf(".") === -1) return banded;
     return banded.replace(/0+$/, "").replace(/\.$/, "");
+  }
+
+  /**
+   * An average as it is spoken, kept inside the range of the values it
+   * averages. The magnitude rule can round a mean past an end of the range
+   * (the mean of 100.6 and 100.8 is 100.7, and the rule says 101). Where it
+   * does, decimals are added until the spoken figure lies inside the range.
+   * Every other average is spoken as `formatDerivedValue` says it.
+   * @param {number} mean - The mean of the values
+   * @param {number} min - The lowest value
+   * @param {number} max - The highest value
+   * @returns {string} The mean as it is spoken
+   */
+  function formatMean(mean, min, max) {
+    const banded = formatDerivedValue(mean);
+    if (!Number.isFinite(mean) || !Number.isFinite(min) || !Number.isFinite(max)) {
+      return banded;
+    }
+    const inside = (text) => Number(text) >= min && Number(text) <= max;
+    if (inside(banded)) return banded;
+    for (let decimals = 0; decimals <= MAX_RESTORED_DECIMALS; decimals += 1) {
+      const restored = dropTrailingZeros(mean.toFixed(decimals));
+      if (inside(restored)) return restored;
+    }
+    return banded;
   }
 
   /**
@@ -655,12 +767,15 @@
       else unchanged += 1;
     }
 
+    // "Consistently" is only said when the series also ends on the side that
+    // most of its steps point to. Nine small falls and one huge rise end higher,
+    // so they are not a consistent fall.
+    const overall = values[values.length - 1] - values[0];
     const steps = values.length - 1;
-    if (positive > TREND_DOMINANCE * steps) return TRENDS.UP;
-    if (negative > TREND_DOMINANCE * steps) return TRENDS.DOWN;
+    if (positive > TREND_DOMINANCE * steps && overall > 0) return TRENDS.UP;
+    if (negative > TREND_DOMINANCE * steps && overall < 0) return TRENDS.DOWN;
     if (unchanged > TREND_DOMINANCE * steps) return TRENDS.STABLE;
 
-    const overall = values[values.length - 1] - values[0];
     if (overall > 0) return TRENDS.UP_NOISY;
     if (overall < 0) return TRENDS.DOWN_NOISY;
     return TRENDS.NONE;
@@ -669,11 +784,15 @@
   /**
    * Interior local maxima and minima: a point strictly greater (or smaller)
    * than both neighbours. The first and last points are never counted, having
-   * only one neighbour each.
-   * @param {Array<number>} values - The series values in source order
+   * only one neighbour each. A run of equal values counts as one point.
+   * @param {Array<number>} allValues - The series values in source order
    * @returns {Object} `{ peaks, troughs }`
    */
-  function countPeaksAndTroughs(values) {
+  function countPeaksAndTroughs(allValues) {
+    // A run of equal values is one point: a flat top is one peak, not none.
+    const values = allValues.filter(
+      (value, i) => i === 0 || value !== allValues[i - 1]
+    );
     let peaks = 0;
     let troughs = 0;
     for (let i = 1; i < values.length - 1; i += 1) {
@@ -1408,26 +1527,38 @@
         ];
       }
 
-      let highest = series[0];
-      let highestMean = computeStatistics(series[0].values).mean;
-      for (const one of series.slice(1)) {
-        const mean = computeStatistics(one.values).mean;
-        if (mean > highestMean) {
-          highestMean = mean;
-          highest = one;
-        }
+      // Means are compared to 12 significant figures, so that sums which differ
+      // only by floating-point noise count as equal.
+      const means = series.map((one) =>
+        Number(computeStatistics(one.values).mean.toPrecision(MEAN_COMPARE_DIGITS))
+      );
+      const highestMean = Math.max(...means);
+      const leaders = series.filter((one, i) => means[i] === highestMean);
+      // A mean that is not a number (outside the stated input) names the first series, as before.
+      if (leaders.length === 0) leaders.push(series[0]);
+      if (leaders.length === series.length) {
+        return [text("The series have the same average.")];
+      }
+      if (leaders.length > 1) {
+        return [
+          ...capitaliseRuns(
+            joinRuns(leaders.map((one) => seriesLabelRuns(one, series)))
+          ),
+          text(" show the highest overall values."),
+        ];
       }
       return [
-        ...capitaliseRuns(seriesLabelRuns(highest, series)),
+        ...capitaliseRuns(seriesLabelRuns(leaders[0], series)),
         text(" shows the highest overall values."),
       ];
     }
 
     const only = series[0];
     const stats = computeStatistics(only.values);
+    const ends = formatRangeEndsForTier(tier, stats.min, stats.max);
     const rangeSentence = [
       text(
-        `Values range from ${formatAuthorValueForTier(tier, stats.min)} to ${formatAuthorValueForTier(tier, stats.max)} with an average of ${formatDerivedValue(stats.mean)}.`
+        `Values range from ${ends.min} to ${ends.max} with an average of ${formatMean(stats.mean, stats.min, stats.max)}.`
       ),
     ];
 
@@ -1451,7 +1582,7 @@
         return [
           ...capitaliseRuns(seriesLabelRuns(only, series)),
           text(
-            ` shows a ${trend} trend, ranging from ${formatAuthorValueForTier(tier, stats.min)} to ${formatAuthorValueForTier(tier, stats.max)}.`
+            ` shows a ${trend} trend, ranging from ${ends.min} to ${ends.max}.`
           ),
         ];
       }
@@ -1470,7 +1601,7 @@
         return [
           ...capitaliseRuns(seriesLabelRuns(only, series)),
           ...turnRuns,
-          text(", with values between " + formatAuthorValueForTier(tier, stats.min) + " and " + formatAuthorValueForTier(tier, stats.max) + "."),
+          text(", with values between " + ends.min + " and " + ends.max + "."),
         ];
       }
       // `is ${trend}` CANNOT RECEIVE THE UNKNOWN SENTINEL. analyseTrend returns
@@ -1480,7 +1611,7 @@
       return [
         ...capitaliseRuns(seriesLabelRuns(only, series)),
         text(
-          ` is ${trend}, with values between ${formatAuthorValueForTier(tier, stats.min)} and ${formatAuthorValueForTier(tier, stats.max)}.`
+          ` is ${trend}, with values between ${ends.min} and ${ends.max}.`
         ),
       ];
     }
@@ -2047,7 +2178,7 @@
           ])
         );
       }
-      items.push(item([text(`Average value: ${formatDerivedValue(stats.mean)}.`)]));
+      items.push(item([text(`Average value: ${formatMean(stats.mean, stats.min, stats.max)}.`)]));
 
       if (stats.count >= STATISTICS_MIN_POINTS) {
         items.push(
