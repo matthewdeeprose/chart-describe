@@ -93,6 +93,8 @@ The xychart rules live in `charts-xychart.js`. The builder is `buildXychartModel
 
 **Mismatched series.** When the series have different numbers of values, the takeaway says so instead of comparing averages. `buildTakeawayRuns` does this. A series that disagrees with the number of labels the author declared gets its own sentence in the Construction section (`mismatchedSeries` finds them).
 
+**The noun for the labels.** `axisNoun` chooses it. The author's x-axis title is never changed, and it is never used as a noun. With no title, the describer names the kind of label it detects ("six months"), or says "categories". With a title, the describer says "categories", unless the title contains a word that starts with the detected noun. "Month", "Monthly figures" and "Academic year" all do, so they read "six months" and "three years". "Team member" over April, May and June does not, so it reads "three categories".
+
 **Single values.** A series with one value reads "The chart has a single value, 42, at "Mon"." A series where every value is the same reads "All three values are 42." or "Both values are 42." That is `degenerateTakeaway`. Next to other series, it reads "Every value in the "Forecast" series is 300." (`degenerateSeriesInsight`). No range, trend or ratio is claimed for a series with no variation (`isDegenerateSeries`).
 
 **Ties.** `computeStatistics` finds every position that holds the highest value and every position that holds the lowest. `pointReferencesRuns` names them all. From four tied positions (`TIED_POSITION_COLLAPSE_AT`), it gives a count instead of a list.
@@ -100,6 +102,8 @@ The xychart rules live in `charts-xychart.js`. The builder is `buildXychartModel
 **Signed values.** The takeaway says "N% below the average" only when the lowest value is zero or above. A negative lowest value would give a figure above 100%, which misleads. `buildTakeawayRuns` carries this guard. The "above the average" sentence has no such limit.
 
 **Trends.** Trend sentences appear on line series only. They never appear when the x-axis is a numeric range, because a numeric range is not a sequence of occasions. `analyseTrend` decides the trend, and `TREND_CLAUSE` holds the exact words.
+
+**A series that turns once.** `turnShape` looks for a series that rises to its highest value and then falls, or falls to its lowest value and then rises. The turn must be inside the series, and a flat top is allowed. Each leg must be longer than 10% of the gap between the highest and the lowest value (`TURN_TOLERANCE`). Inside a leg, a step against its direction may not be longer than that same 10%. When a series turns once, the trend bullet reads "rises, then falls" or "falls, then rises". This replaces the "generally increasing", "generally decreasing" and "no clear trend" wording only. "Consistently" and "stable" stay as they are, and a series with two humps keeps its old wording. A one-series chart also names the turning label in its short sentence, for example "rises to a peak at "Mar", then falls". The next bullet already names the highest point, so the trend bullet leaves the label out. `TURN_CLAUSE` holds the words, and `turnClauseRuns` writes them with the label as an author run.
 
 **Statistics.** From five values (`STATISTICS_MIN_POINTS`), a single-series bar chart adds the standard deviation, the median, and a sentence on skew (`buildDistributionSentence`).
 

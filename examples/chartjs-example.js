@@ -64,7 +64,7 @@
           labels: {
             color: TEXT_COLOUR,
             font: { size: 14 },
-            // Draw the real line style and point shape in the key.
+            // The key shows each line's colour and style.
             usePointStyle: false,
             boxWidth: 48,
           },

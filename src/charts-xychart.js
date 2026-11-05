@@ -153,7 +153,8 @@
   // for every member of the vocabulary above, which produces "shows a generally
   // decreasing with fluctuations trend" and "shows a fluctuating with no clear
   // trend trend". This code reorders the clause for each trend instead, which
-  // is why it is a table and not one template.
+  // is why it is a table and not one template. A series that turns once uses
+  // TURN_CLAUSE instead of the three noisy or unclear entries below.
   const TREND_CLAUSE = Object.freeze({
     [TRENDS.UP]: "shows a consistently increasing trend",
     [TRENDS.DOWN]: "shows a consistently decreasing trend",
@@ -682,6 +683,107 @@
     return { peaks: peaks, troughs: troughs };
   }
 
+  // How far a step may go against its leg and still count as one rise or one
+  // fall, as a share of the gap between the highest and the lowest value.
+  const TURN_TOLERANCE = 0.1;
+
+  // The two shapes of a series that turns once.
+  const TURN_SHAPES = Object.freeze({
+    PEAK: "peak",
+    LOW: "low",
+  });
+
+  // The words for a series that turns once. The trend bullet leaves out the
+  // label, because the next bullet already names the highest or lowest point.
+  // The short sentence of a one-series chart names it, because nothing else
+  // does.
+  const TURN_CLAUSE = Object.freeze({
+    [TURN_SHAPES.PEAK]: Object.freeze({
+      plain: " rises, then falls",
+      labelledBefore: " rises to a peak at ",
+      labelledAfter: ", then falls",
+    }),
+    [TURN_SHAPES.LOW]: Object.freeze({
+      plain: " falls, then rises",
+      labelledBefore: " falls to a low at ",
+      labelledAfter: ", then rises",
+    }),
+  });
+
+  /**
+   * Whether a series turns once. It must reach its highest value (or its
+   * lowest) somewhere inside the series, and a flat top is allowed. Each leg
+   * must be longer than the tolerance. Inside a leg, a step against the leg's
+   * direction may not be longer than the tolerance. A series with two humps,
+   * or a turn at either end, is not a single turn.
+   * @param {Array<number>} values - The series values in source order
+   * @returns {string|null} A TURN_SHAPES value, or null
+   */
+  function turnShape(values) {
+    const count = values.length;
+    if (count < 3) return null;
+    const range = Math.max(...values) - Math.min(...values);
+    if (!(range > 0)) return null;
+    const tolerance = TURN_TOLERANCE * range;
+
+    // Tests for a peak. A low is the same test on the negated values.
+    const turnsOnce = (sign) => {
+      const signed = values.map((value) => value * sign);
+      const top = Math.max(...signed);
+      const first = signed.indexOf(top);
+      const last = signed.lastIndexOf(top);
+      if (first === 0 || last === count - 1) return false;
+      for (let i = first; i <= last; i += 1) {
+        if (signed[i] !== top) return false;
+      }
+      if (top - signed[0] <= tolerance) return false;
+      if (top - signed[count - 1] <= tolerance) return false;
+      for (let i = 1; i <= first; i += 1) {
+        const stepBack = signed[i - 1] - signed[i];
+        if (stepBack > tolerance) return false;
+      }
+      for (let i = last + 1; i < count; i += 1) {
+        const stepBack = signed[i] - signed[i - 1];
+        if (stepBack > tolerance) return false;
+      }
+      return true;
+    };
+
+    if (turnsOnce(1)) return TURN_SHAPES.PEAK;
+    if (turnsOnce(-1)) return TURN_SHAPES.LOW;
+    return null;
+  }
+
+  /**
+   * The runs that say a series turns once, or null when it does not.
+   * @param {Object} chart - The adapter's chart
+   * @param {Array<number>} values - The series values in source order
+   * @param {boolean} withLabel - True to name the highest or lowest point
+   * @returns {Array<Object>|null} Runs that start with a space
+   */
+  function turnClauseRuns(chart, values, withLabel) {
+    const { text } = modelCore();
+    const shape = turnShape(values);
+    if (!shape) return null;
+    const clause = TURN_CLAUSE[shape];
+    if (!withLabel) return [text(clause.plain)];
+    const stats = computeStatistics(values);
+    const indices =
+      shape === TURN_SHAPES.PEAK ? stats.maxIndices : stats.minIndices;
+    const at = pointReferencesRuns(chart, indices, REFERENCE_STYLE.STANDALONE);
+    return [text(clause.labelledBefore), ...at, text(clause.labelledAfter)];
+  }
+
+  // The trend classes whose wording a single turn replaces. "Consistently" and
+  // "stable" make a claim about most steps, and they stay as they are.
+  function turnReplacesTrend(trend) {
+    return (
+      trend === TRENDS.UP_NOISY ||
+      trend === TRENDS.DOWN_NOISY ||
+      trend === TRENDS.NONE
+    );
+  }
+
   /**
    * The unimodal test, stated exactly: strictly one INTERIOR maximum, with the
    * values rising before it and falling after it. A plateau anywhere breaks it,
@@ -1071,8 +1173,8 @@
    * The singular is lower-cased because the label-type nouns are stored with a
    * capital letter for their use as table headers. THIS DOES NOT TOUCH AUTHOR
    * TEXT. Every noun that reaches this function is the describer's own. An
-   * author's x-axis title never becomes one. The title wins outright and sends
-   * the detector back to Category and categories.
+   * author's x-axis title never becomes one. A title that does not name the
+   * detected label type sends the detector back to Category and categories.
    *
    * @param {Object} noun - An axisNoun result, `{ singular, plural }`
    * @param {number} count - How many positions are being counted
@@ -1182,9 +1284,15 @@
 
   /**
    * The noun a band axis's positions take in prose. An author x-axis title
-   * always wins, and where one exists the detector is not consulted at all.
-   * The title names the axis, and the describer's own neutral noun counts the
-   * positions.
+   * always wins, so the title is never changed. The describer's own neutral
+   * noun counts the positions, with one exception: when the title contains a
+   * word that starts with the detected noun ("Month", "Monthly figures",
+   * "Academic year"), the title and the labels agree, and the detected noun
+   * counts them ("six months"). A title that names something else, such as
+   * "Team member" over April, May and June, keeps the neutral noun.
+   *
+   * The pattern is built from the describer's own noun and never from author
+   * text.
    * @param {Object} chart - The adapter's chart
    * @returns {Object} `{ singular, plural, detected }`
    */
@@ -1196,14 +1304,19 @@
         detected: false,
       };
     }
-    if (chart.xAxis.title) {
+    const found = detectLabelNoun(chart.xAxis.categories || []);
+    const title = chart.xAxis.title;
+    const titleNamesLabels =
+      found.detected &&
+      new RegExp("\\b" + found.singular.toLowerCase(), "i").test(title || "");
+    if (title && !titleNamesLabels) {
       return {
         singular: FALLBACK_NOUN.singular,
         plural: FALLBACK_NOUN.plural,
         detected: false,
       };
     }
-    return detectLabelNoun(chart.xAxis.categories || []);
+    return found;
   }
 
   /**
@@ -1348,6 +1461,16 @@
           text(` peaks significantly at ${formatAuthorValueForTier(tier, stats.max)} during `),
           ...pointReferencesRuns(chart, stats.maxIndices, REFERENCE_STYLE.STANDALONE),
           text("."),
+        ];
+      }
+      const turnRuns = turnReplacesTrend(trend)
+        ? turnClauseRuns(chart, only.values, true)
+        : null;
+      if (turnRuns) {
+        return [
+          ...capitaliseRuns(seriesLabelRuns(only, series)),
+          ...turnRuns,
+          text(", with values between " + formatAuthorValueForTier(tier, stats.min) + " and " + formatAuthorValueForTier(tier, stats.max) + "."),
         ];
       }
       // `is ${trend}` CANNOT RECEIVE THE UNKNOWN SENTINEL. analyseTrend returns
@@ -2013,7 +2136,11 @@
     if (!isRangeAxis) {
       const trend = analyseTrend(series.values);
       const clause = TREND_CLAUSE[trend];
-      if (clause) items.push(item([...capitaliseRuns(label), text(` ${clause}.`)]));
+      const turn = turnReplacesTrend(trend)
+        ? turnClauseRuns(chart, series.values, false)
+        : null;
+      if (turn) items.push(item([...capitaliseRuns(label), ...turn, text(".")]));
+      else if (clause) items.push(item([...capitaliseRuns(label), text(` ${clause}.`)]));
     }
 
     // This is the line-chart side of dropping the extremes on a flat series. The
