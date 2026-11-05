@@ -38,7 +38,10 @@ test("classify names the same reason for a pie config with a bar dataset", () =>
 test("a pie config whose dataset has no type is still a pie", () => {
   const result = lib.chartjs.describe(pieConfig(undefined));
   assert.equal(result.supported, true);
-  assert.equal(result.short, "A pie chart showing the distribution of two categories.");
+  assert.equal(
+    result.short,
+    "A pie chart showing the distribution of two categories. B is the largest segment at 66.7%, representing over half of the total.",
+  );
 });
 
 test("a pie config whose dataset type is pie reads exactly as one with no dataset type", () => {
