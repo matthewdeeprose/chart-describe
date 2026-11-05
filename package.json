@@ -1,0 +1,13 @@
+{
+  "name": "chart-describe",
+  "version": "0.1.0",
+  "description": "Plain-language descriptions of charts, for people who cannot see them.",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/escaping.test.mjs test/goldens.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
