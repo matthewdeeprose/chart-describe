@@ -2,12 +2,18 @@
 
 chart-describe writes plain-language descriptions of charts, for people who cannot see them. You give it the facts of a chart. It gives you words.
 
+It works with **Chart.js**. Pass a bar, line or pie config to one call, `ChartDescribeChartJs.describe(config)`, and you get the words back. It also takes the data behind Mermaid's pie, radar and xychart diagrams: the builders below accept that shape.
+
 It describes three kinds of chart: bar and line charts (together called xychart), pie charts, and radar charts. Every chart gets two descriptions:
 
 - **Short.** One or two sentences. Use it as an `aria-label` or a caption.
 - **Detailed.** Headed sections: how the chart is built, the main facts, and every value in a table.
 
 The rules are fixed. The same chart always gets the same words. There is no model to train and no service to call. The library has no dependencies and no build step. Read [docs/STANDARD.md](docs/STANDARD.md) to see every wording rule.
+
+## Try the example
+
+[examples/chartjs.html](examples/chartjs.html) draws one Chart.js line chart and shows both descriptions. The three lines differ by colour, line style and point shape. Open the file in a browser. It works from a local file and from a web server. It loads Chart.js 4.5.1 from the jsDelivr CDN, so you need a network connection. The config and the wiring are in [examples/chartjs-example.js](examples/chartjs-example.js).
 
 ## What you get back
 

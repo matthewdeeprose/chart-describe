@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en-GB">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>chart-describe with Chart.js</title>
+    <link rel="stylesheet" href="example.css" />
+  </head>
+  <body>
+    <main>
+      <h1>chart-describe with Chart.js</h1>
+      <p>
+        This page draws one Chart.js line chart. chart-describe reads the same
+        config and writes a short and a detailed description. The numbers are
+        made up.
+      </p>
+
+      <h2>The chart</h2>
+      <div class="chart-box">
+        <canvas id="chart" role="img" aria-label=""></canvas>
+      </div>
+
+      <h2>The description</h2>
+      <h3>Short description</h3>
+      <div id="short"></div>
+      <h3>Detailed description</h3>
+      <div id="detailed"></div>
+    </main>
+
+    <script
+      src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.js"
+      integrity="sha384-hfkuqrKeWFmnTMWN31VWyoe8xgdTADD11kgxmdpx2uyE6j5Az5uZq6u6AKYYmAOw"
+      crossorigin="anonymous"
+    ></script>
+    <script src="../src/text.js"></script>
+    <script src="../src/model.js"></script>
+    <script src="../src/render.js"></script>
+    <script src="../src/charts-shared.js"></script>
+    <script src="../src/charts-xychart.js"></script>
+    <script src="../src/charts-pie.js"></script>
+    <script src="../src/charts-radar.js"></script>
+    <script src="../src/charts.js"></script>
+    <script src="../src/chartjs.js"></script>
+    <script src="chartjs-example.js"></script>
+  </body>
+</html>
