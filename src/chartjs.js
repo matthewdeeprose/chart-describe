@@ -130,6 +130,7 @@
     radar: "radial",
   });
 
+  const TYPE_PIE = "pie";
   const XYCHART_KINDS = Object.freeze(["bar", "line"]);
   const AXIS_KIND_BAND = "band";
   const AXIS_KIND_TIME = "time";
@@ -391,6 +392,9 @@
   const SUPPORTED = Object.freeze({ supported: true });
   const isFiniteNumber = (v) => typeof v === "number" && Number.isFinite(v);
 
+  /** A dataset with no `type` takes the chart's own type, so only an explicit other type fails. */
+  const isPieDataset = (ds) => ds.type === undefined || ds.type === TYPE_PIE;
+
   /** Distinct value-axis ids used by the datasets, plus extra scales. */
   function hasMultipleValueAxes(config, horizontal) {
     const idKey = horizontal ? "xAxisID" : "yAxisID";
@@ -453,6 +457,11 @@
       if (model.series.length > 1) return unsupported(REASONS.MULTI_DATASET_PIE);
       if (model.series[0].values.length !== model.domainAxis.labels.length) {
         return unsupported(REASONS.PIE_LENGTH_MISMATCH);
+      }
+      // A dataset `type` overrides the chart type, so the dataset must be a
+      // pie too, or the picture is not the pie the text would name.
+      if (!isPieDataset(config.data.datasets[0])) {
+        return unsupported(REASONS.UNSUPPORTED_SERIES_TYPE);
       }
       return SUPPORTED;
     }
