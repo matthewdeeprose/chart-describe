@@ -60,6 +60,17 @@ test("0.01, 0.02 and 0.03 need two decimal places", () => {
   assert.equal(seriesLine([0.01, 0.02, 0.03]), '1. "S", averaging 0.02. Highest on "Axis3", lowest on "Axis1".');
 });
 
+test("the search reaches the series' own largest number of decimal places and no further", () => {
+  // mean 0.03; the values have 2 decimal places, so the search runs 0, 1, 2; whole number 0 and one
+  // decimal place 0.0 are both below 0.02; two places give 0.03, inside 0.02 to 0.04
+  assert.equal(seriesLine([0.02, 0.03, 0.04]), '1. "S", averaging 0.03. Highest on "Axis3", lowest on "Axis1".');
+});
+
+test("decimal places are counted from the number's text, exponent form included", () => {
+  // 1e-7, 2e-7 and 3e-7 have 7 decimal places; mean 2e-7; only the 7th place is inside the values
+  assert.equal(seriesLine([1e-7, 2e-7, 3e-7]), '1. "S", averaging 2e-7. Highest on "Axis3", lowest on "Axis1".');
+});
+
 test("negative values follow the same rule", () => {
   // mean -0.3; whole number 0 is above -0.2; one decimal place gives -0.3, inside -0.4 to -0.2
   assert.equal(seriesLine([-0.4, -0.3, -0.2]), '1. "S", averaging -0.3. Highest on "Axis3", lowest on "Axis1".');

@@ -124,9 +124,9 @@
   // author can make, and far above the error that one binary sum leaves.
   const HALF_TOLERANCE = 1e-9;
 
-  // The most decimal places the series average is tried at. Any value typed
-  // with fewer places stops the search long before this.
-  const MEAN_MAX_PLACES = 15;
+  // Reads the decimal places and the exponent out of a number's shortest
+  // round-trip text, for example "0.25" or "1.5e-7".
+  const NUMBER_TEXT_PATTERN = /^\d+(?:\.(\d+))?(?:e([+-]\d+))?$/;
 
   // Where the renderer draws a value that it clamps. A value above the maximum
   // is drawn at the maximum's radius. A value below the minimum is drawn at
@@ -584,6 +584,12 @@
    * so on; the first result inside the values is used. Equal values take the
    * same path: the mean equals the value, so the search stops at the value.
    *
+   * THE SEARCH STOPS AT THE SERIES' OWN LARGEST NUMBER OF DECIMAL PLACES. The
+   * lowest and highest values are exact at that precision, and rounding keeps
+   * order, so a mean between them rounds to a figure between them. If floating
+   * point ever defeats that, the figure at that precision is used and a warning
+   * is logged.
+   *
    * @param {number[]} values - A series' values
    * @returns {number} The rounded mean
    */
@@ -591,18 +597,38 @@
     const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
     const lowest = Math.min(...values);
     const highest = Math.max(...values);
+    const lastPlaces = Math.max(...values.map(decimalPlaces));
 
     // Whole number first; then one decimal place, two, and so on, until the
     // result lies inside the series' own values (inclusive).
     let rounded = 0;
-    for (let places = 0; places <= MEAN_MAX_PLACES; places += 1) {
+    for (let places = 0; places <= lastPlaces; places += 1) {
       rounded = roundHalfAwayFromZero(mean, places);
       if (rounded >= lowest && rounded <= highest) return rounded;
     }
 
-    // Reached only when the values need more than MEAN_MAX_PLACES decimal
-    // places to be matched; the nearest value inside the series is used.
-    return Math.min(Math.max(rounded, lowest), highest);
+    logWarn("The average lies outside the series at its own precision", {
+      mean,
+      lowest,
+      highest,
+      places: lastPlaces,
+    });
+    return rounded;
+  }
+
+  /**
+   * The decimal places of a number as an author wrote it, read from its
+   * shortest round-trip text: 0.25 has 2, 3 has 0, 1.5e-7 has 8.
+   *
+   * @param {number} value - A delivered number
+   * @returns {number} Its decimal places (0 for a number with none)
+   */
+  function decimalPlaces(value) {
+    const match = NUMBER_TEXT_PATTERN.exec(String(Math.abs(value)));
+    if (!match) return 0;
+    const fractionDigits = match[1] ? match[1].length : 0;
+    const exponent = match[2] ? Number(match[2]) : 0;
+    return Math.max(0, fractionDigits - exponent);
   }
 
   /**
