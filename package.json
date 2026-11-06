@@ -5,7 +5,7 @@
   "license": "MIT",
   "private": true,
   "scripts": {
-    "test": "node --test test/escaping.test.mjs test/goldens.test.mjs test/text.test.mjs test/xychart-wording.test.mjs"
+    "test": "node --test test/escaping.test.mjs test/goldens.test.mjs test/text.test.mjs test/xychart-wording.test.mjs test/xychart-fixes.test.mjs test/pie-fixes.test.mjs test/chartjs-fixes.test.mjs test/radar-fixes.test.mjs"
   },
   "engines": {
     "node": ">=20"
