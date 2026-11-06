@@ -146,6 +146,10 @@
     UP_NOISY: "generally increasing with fluctuations",
     DOWN_NOISY: "generally decreasing with fluctuations",
     NONE: "fluctuating with no clear trend",
+    LEVEL_RISE: "mostly level, apart from a large rise",
+    LEVEL_FALL: "mostly level, apart from a large fall",
+    RISES: "rising",
+    FALLS: "falling",
     UNKNOWN: "unknown",
   });
 
@@ -163,6 +167,10 @@
     [TRENDS.DOWN_NOISY]:
       "shows a generally decreasing trend, with fluctuations",
     [TRENDS.NONE]: "fluctuates with no clear trend",
+    [TRENDS.LEVEL_RISE]: "is mostly level, apart from a large rise",
+    [TRENDS.LEVEL_FALL]: "is mostly level, apart from a large fall",
+    [TRENDS.RISES]: "rises",
+    [TRENDS.FALLS]: "falls",
   });
 
   // Chart.js's rankingWords, extended past "ninth" with a suffix rule. On a
@@ -200,6 +208,8 @@
   const LOW_POINT_RATIO = 0.5;
   const SKEW_TOLERANCE = 0.2;
   const OVERALL_CHANGE_MIN_PERCENT = 50;
+  // A start smaller than this share of the series' largest absolute value is "near zero".
+  const NEAR_ZERO_START_SHARE = 0.01;
 
   // The fallback words for a band axis. The describer uses them when the author
   // declared no axis title and the label-type detector below found no shape
@@ -747,10 +757,40 @@
     return stats.count >= 1 && stats.max === stats.min;
   }
 
+  // A mostly flat series is "stable" only if its net change is at most this share of its range.
+  const STABLE_NET_RANGE_SHARE = 0.5;
+  // Fewer steps than this cannot be called a consistent trend.
+  const TREND_MIN_STEPS = 3;
+  // A generally-increasing or decreasing trend needs a fitted line that agrees with the end points and rises
+  // (or falls) by at least this share of the range across the whole series.
+  const FITTED_RISE_MIN_SHARE = 0.1;
+
   /**
-   * Chart.js's `analyzeTrend`, quoted. More than 70% of steps in one direction
-   * gives "consistently". Otherwise the sign of the last value minus the first
-   * decides.
+   * The least-squares line through the points, as the rise across the whole series divided by the range.
+   * @param {Array<number>} values - The series values in source order
+   * @returns {number} Signed share of the range, 0 when the range is 0
+   */
+  function fittedRiseShare(values) {
+    const count = values.length;
+    const middle = (count - 1) / 2;
+    const meanValue = values.reduce((sum, value) => sum + value, 0) / count;
+    let covariance = 0;
+    let spread = 0;
+    for (let i = 0; i < count; i += 1) {
+      covariance += (i - middle) * (values[i] - meanValue);
+      spread += (i - middle) * (i - middle);
+    }
+    const range = Math.max(...values) - Math.min(...values);
+    if (!(range > 0) || !(spread > 0)) return 0;
+    return ((covariance / spread) * (count - 1)) / range;
+  }
+
+  /**
+   * Chart.js's `analyzeTrend`, quoted, with three additions. More than 70% of
+   * steps in one direction gives "consistently". Otherwise the sign of the last
+   * value minus the first decides, but only when a fitted line agrees with it.
+   * One or two steps read as a plain rise or fall, and a mostly flat series
+   * that ends far from its start is level apart from one large change.
    * @param {Array<number>} values - The series values in source order
    * @returns {string} One of the TRENDS vocabulary
    */
@@ -772,9 +812,27 @@
     // so they are not a consistent fall.
     const overall = values[values.length - 1] - values[0];
     const steps = values.length - 1;
+    // One or two steps are a rise or a fall, not a consistent trend.
+    if (steps < TREND_MIN_STEPS) {
+      if (positive === steps && overall > 0) return TRENDS.RISES;
+      if (negative === steps && overall < 0) return TRENDS.FALLS;
+    }
     if (positive > TREND_DOMINANCE * steps && overall > 0) return TRENDS.UP;
     if (negative > TREND_DOMINANCE * steps && overall < 0) return TRENDS.DOWN;
-    if (unchanged > TREND_DOMINANCE * steps) return TRENDS.STABLE;
+    if (unchanged > TREND_DOMINANCE * steps) {
+      // Mostly flat steps, but the series ends far from where it began, so it is not "stable".
+      const range = Math.max(...values) - Math.min(...values);
+      if (range > 0 && Math.abs(overall) > STABLE_NET_RANGE_SHARE * range) {
+        return overall > 0 ? TRENDS.LEVEL_RISE : TRENDS.LEVEL_FALL;
+      }
+      return TRENDS.STABLE;
+    }
+
+    // A direction needs the fitted line to agree with the end points and to move by a real share of the range.
+    if (overall !== 0) {
+      const fitted = fittedRiseShare(values);
+      if (Math.sign(fitted) !== Math.sign(overall) || Math.abs(fitted) < FITTED_RISE_MIN_SHARE) return TRENDS.NONE;
+    }
 
     if (overall > 0) return TRENDS.UP_NOISY;
     if (overall < 0) return TRENDS.DOWN_NOISY;
@@ -1031,11 +1089,20 @@
   function seriesColumnHeader(series, allSeries) {
     const { text, author } = modelCore();
     const identity = seriesIdentity(series, allSeries);
-    if (identity.name) return [author(identity.name)];
+    if (identity.name) {
+      const sameName = allSeries.filter((one) => one.name === series.name);
+      if (sameName.length > 1) return [author(identity.name), text(` (series ${sameName.indexOf(series) + 1})`)];
+      return [author(identity.name)];
+    }
 
     const base = `${capitalise(identity.kind)} series`;
     return [text(identity.isAmongSeveral ? `${base} ${identity.position}` : base)];
   }
+
+  // A label is blank when it holds only white space and Unicode format characters (zero-width space, joiner and the like).
+  const BLANK_LABEL = /^[\s\p{Cf}]*$/u;
+  // White space and format characters at either end of a label do not change how it sounds or looks.
+  const LABEL_EDGES = /^[\s\p{Cf}]+|[\s\p{Cf}]+$/gu;
 
   /**
    * True when the label at this index appears more than once on the axis, so a
@@ -1043,6 +1110,9 @@
    *
    * Compared on the AUTHOR'S OWN text, before escaping, so two labels that
    * differ only in characters an HTML sink would encode are still two labels.
+   * Edge white space and format characters are ignored ("Autumn " repeats
+   * "Autumn"), case and interior characters are not, and a blank label is
+   * never a repeat.
    *
    * @param {Object} chart - The adapter's chart
    * @param {number} index - 0-based point index
@@ -1052,9 +1122,10 @@
     const categories = declaredCategories(chart);
     const label = categories[index];
     if (typeof label !== "string") return false;
+    const key = label.replace(LABEL_EDGES, "");
     let seen = 0;
     for (const one of categories) {
-      if (one === label) seen += 1;
+      if (typeof one === "string" && !BLANK_LABEL.test(one) && one.replace(LABEL_EDGES, "") === key) seen += 1;
       if (seen > 1) return true;
     }
     return false;
@@ -1093,6 +1164,11 @@
     const identity = seriesIdentity(series, allSeries);
 
     if (identity.name) {
+      // Two series with one name are told apart by their order.
+      const sameName = allSeries.filter((one) => one.name === series.name);
+      if (sameName.length > 1) {
+        return [text(`the ${ordinalWord(sameName.indexOf(series) + 1)} "`), author(identity.name), text('" series')];
+      }
       return [text('the "'), author(identity.name), text('" series')];
     }
     if (!identity.isAmongSeveral) {
@@ -1122,6 +1198,10 @@
   function pointReferencePartRuns(chart, index) {
     const { text, author } = modelCore();
     const label = declaredCategories(chart)[index];
+    if (typeof label === "string" && BLANK_LABEL.test(label)) {
+      // A blank label has no name to speak, so the describer names the position.
+      return { kind: "label", runs: [text(`unlabelled category ${index + 1}`)], disambiguator: null };
+    }
     if (typeof label === "string") {
       return {
         kind: "label",
@@ -1213,6 +1293,10 @@
       return referenceRuns(pointReferencePartRuns(chart, indices[0]), style);
     }
     if (indices.length >= TIED_POSITION_COLLAPSE_AT) {
+      // On a labelled axis the collapsed set is categories, not points.
+      if (hasDeclaredCategories(chart)) {
+        return [text(`${countWord(indices.length)} of the ${axisNoun(chart).plural}`)];
+      }
       return [text(`${countWord(indices.length)} points`)];
     }
 
@@ -1578,20 +1662,25 @@
 
     if (only.kind === SERIES_KINDS.LINE) {
       const trend = analyseTrend(only.values);
-      if (trend === TRENDS.UP || trend === TRENDS.DOWN) {
+      if (
+        trend === TRENDS.UP ||
+        trend === TRENDS.DOWN ||
+        trend === TRENDS.RISES ||
+        trend === TRENDS.FALLS
+      ) {
         return [
           ...capitaliseRuns(seriesLabelRuns(only, series)),
           text(
-            ` shows a ${trend} trend, ranging from ${ends.min} to ${ends.max}.`
+            ` ${TREND_CLAUSE[trend]}, ranging from ${ends.min} to ${ends.max}.`
           ),
         ];
       }
       if (maxRatio > HIGH_POINT_RATIO) {
         return [
           ...capitaliseRuns(seriesLabelRuns(only, series)),
-          text(` peaks significantly at ${formatAuthorValueForTier(tier, stats.max)} during `),
+          text(` peaks at ${formatAuthorValueForTier(tier, stats.max)} during `),
           ...pointReferencesRuns(chart, stats.maxIndices, REFERENCE_STYLE.STANDALONE),
-          text("."),
+          text(", well above its average."),
         ];
       }
       const turnRuns = turnReplacesTrend(trend)
@@ -2087,9 +2176,17 @@
       }
     }
 
-    if (xClause && yClause) return [...xClause, text(", and "), ...yClause, text(".")];
+    // Say so when a value lies outside the declared y-axis range.
+    const low = chart.yAxis ? Math.min(chart.yAxis.min, chart.yAxis.max) : NaN;
+    const high = chart.yAxis ? Math.max(chart.yAxis.min, chart.yAxis.max) : NaN;
+    const outside =
+      yClause && hasBounds(chart.yAxis) &&
+      chart.series.some((one) => one.values.some((value) => typeof value === "number" && (value < low || value > high)))
+        ? [text(" Some values lie outside the y-axis range.")]
+        : [];
+    if (xClause && yClause) return [...xClause, text(", and "), ...yClause, text("."), ...outside];
     if (xClause) return [...xClause, text(".")];
-    if (yClause) return [...capitaliseRuns(yClause), text(".")];
+    if (yClause) return [...capitaliseRuns(yClause), text("."), ...outside];
     return null;
   }
 
@@ -2140,6 +2237,23 @@
   }
 
   /**
+   * The end of a "Highest value" or "Lowest value" bullet: where the value is.
+   * The positions of a tie sit in the sentence, not inside brackets, as the
+   * line series already does, but only when a tied label is itself repeated:
+   * that is the one case with brackets inside brackets.
+   * @param {Object} chart - The adapter's chart
+   * @param {Array<number>} indices - The 0-based points holding the value
+   * @returns {Array<Object>} Runs that finish the bullet, full stop included
+   */
+  function valueAtRuns(chart, indices) {
+    const { text } = modelCore();
+    if (indices.length > 1 && indices.some((i) => isDuplicatedLabel(chart, i))) {
+      return [text(", at "), ...pointReferencesRuns(chart, indices, REFERENCE_STYLE.STANDALONE), text(".")];
+    }
+    return [text(" ("), ...pointReferencesRuns(chart, indices, REFERENCE_STYLE.PARENTHETICAL), text(").")];
+  }
+
+  /**
    * A bar series' insights.
    * @param {Object} chart - The adapter's chart
    * @param {Object} series - The bar series
@@ -2165,16 +2279,14 @@
       if (!isDegenerateSeries(stats)) {
         items.push(
           item([
-            text(`Highest value: ${formatAuthorValue(stats.max)} (`),
-            ...pointReferencesRuns(chart, stats.maxIndices, REFERENCE_STYLE.PARENTHETICAL),
-            text(")."),
+            text(`Highest value: ${formatAuthorValue(stats.max)}`),
+            ...valueAtRuns(chart, stats.maxIndices),
           ])
         );
         items.push(
           item([
-            text(`Lowest value: ${formatAuthorValue(stats.min)} (`),
-            ...pointReferencesRuns(chart, stats.minIndices, REFERENCE_STYLE.PARENTHETICAL),
-            text(")."),
+            text(`Lowest value: ${formatAuthorValue(stats.min)}`),
+            ...valueAtRuns(chart, stats.minIndices),
           ])
         );
       }
@@ -2195,18 +2307,16 @@
       item([
         text("Highest value in "),
         ...label,
-        text(`: ${formatAuthorValue(stats.max)} (`),
-        ...pointReferencesRuns(chart, stats.maxIndices, REFERENCE_STYLE.PARENTHETICAL),
-        text(")."),
+        text(`: ${formatAuthorValue(stats.max)}`),
+        ...valueAtRuns(chart, stats.maxIndices),
       ])
     );
     items.push(
       item([
         text("Lowest value in "),
         ...label,
-        text(`: ${formatAuthorValue(stats.min)} (`),
-        ...pointReferencesRuns(chart, stats.minIndices, REFERENCE_STYLE.PARENTHETICAL),
-        text(")."),
+        text(`: ${formatAuthorValue(stats.min)}`),
+        ...valueAtRuns(chart, stats.minIndices),
       ])
     );
     return items;
@@ -2270,8 +2380,14 @@
       const turn = turnReplacesTrend(trend)
         ? turnClauseRuns(chart, series.values, false)
         : null;
+      // The takeaway (the first bullet) already says a consistent trend, so it is not repeated.
+      const takeawayStatesTrend =
+        isOnlySeries &&
+        (trend === TRENDS.UP || trend === TRENDS.DOWN || trend === TRENDS.RISES || trend === TRENDS.FALLS) &&
+        Number.isFinite(stats.mean) &&
+        stats.mean !== 0;
       if (turn) items.push(item([...capitaliseRuns(label), ...turn, text(".")]));
-      else if (clause) items.push(item([...capitaliseRuns(label), text(` ${clause}.`)]));
+      else if (clause && !takeawayStatesTrend) items.push(item([...capitaliseRuns(label), text(` ${clause}.`)]));
     }
 
     // This is the line-chart side of dropping the extremes on a flat series. The
@@ -2345,6 +2461,12 @@
     if (first !== 0) {
       const percentChange = ((last - first) / Math.abs(first)) * 100;
       if (Math.abs(percentChange) > OVERALL_CHANGE_MIN_PERCENT) {
+        // A start that is near zero, or on the other side of zero from the end, makes the percentage a function of the start.
+        const scale = Math.max(...series.values.map((value) => Math.abs(value)));
+        if (first * last < 0 || Math.abs(first) < NEAR_ZERO_START_SHARE * scale) {
+          items.push(item([text(`Overall, the values go from ${formatAuthorValue(first)} at the start to ${formatAuthorValue(last)} at the end.`)]));
+          return items;
+        }
         items.push(
           item([
             text(
@@ -2431,7 +2553,9 @@
       // repeats were numbered, the first would look like the only one.
       const rowLabel = isBandAxis
         ? typeof categories[i] === "string"
-          ? isDuplicatedLabel(chart, i)
+          ? BLANK_LABEL.test(categories[i])
+            ? [text(`Unlabelled category ${i + 1}`)]
+            : isDuplicatedLabel(chart, i)
             ? [
                 author(categories[i]),
                 text(` (${POSITION_NOUN.position.singular.toLowerCase()} ${i + 1})`),

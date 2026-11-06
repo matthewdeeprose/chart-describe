@@ -162,7 +162,8 @@ test("turn: a symmetric hill with a short sentence of its own names Wednesday", 
 
 test("turn: a series that rises most of the way still says consistently", () => {
   const result = describe(chart(band(null, MONTHS), [line("Visits", [5, 6, 7, 8, 9, 10])]));
-  assert.ok(result.lines.includes('• The "Visits" series shows a consistently increasing trend.'));
+  assert.ok(result.lines.includes('• The "Visits" series shows a consistently increasing trend, ranging from 5 to 10.'));
+  assert.ok(!result.lines.includes('• The "Visits" series shows a consistently increasing trend.'), "the trend is not repeated");
 });
 
 test("turn: with two series the bullets say rises, then falls and the short sentence stays free of a trend", () => {

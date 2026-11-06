@@ -4,6 +4,10 @@
 // 3. Series with equal averages are not ranked, so none "shows the highest overall values".
 // 4. A flat-topped peak (or a flat-bottomed trough) counts once.
 // 5. A label is called a year, a date or a month only when it is one.
+// 6. Wording that misled: a mostly flat series that ends far from its start, a trend claimed from the end points alone,
+//    a percentage of a start near zero, a value outside the y-axis range, one or two steps called a consistent trend,
+//    a blank label, a tie inside brackets, a trend said twice, "points" on a labelled axis and two series with one name.
+// 7. A repeated or blank label is judged without its edge spaces and invisible characters.
 // Each test builds a chart and checks the exact sentence, and each fix has a chart just on the other side of its rule.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -45,7 +49,7 @@ test("trend: eight falls and a final jump to 1000 is not a consistent fall", () 
   const out = describe(SPIKE);
   assert.equal(
     out.short,
-    'A line chart showing "Score" over 10 categories. The "Score" series peaks significantly at 1000 during "L10".'
+    'A line chart showing "Score" over 10 categories. The "Score" series peaks at 1000 during "L10", well above its average.'
   );
   assert.ok(out.lines.includes('• The "Score" series shows a generally increasing trend, with fluctuations.'));
   assert.ok(out.lines.includes("• Overall increase of 9900.0% from start to end."));
@@ -59,7 +63,7 @@ test("trend: four rises and a final drop to -100 is not a consistent rise", () =
     'A line chart showing "Score" over five days. The "Score" series is generally decreasing with fluctuations, with values between -100 and 13.'
   );
   assert.ok(out.lines.includes('• The "Score" series shows a generally decreasing trend, with fluctuations.'));
-  assert.ok(out.lines.includes("• Overall decrease of 1100.0% from start to end."));
+  assert.ok(out.lines.includes("• Overall, the values go from 10 at the start to -100 at the end."));
   assert.equal(out.lines.filter((text) => text.includes("consistently")).length, 0);
 });
 
@@ -69,7 +73,8 @@ test("trend: eight falls that end lower still read as a consistent fall", () => 
     out.short,
     'A line chart showing "Score" over 10 categories. The "Score" series shows a consistently decreasing trend, ranging from 1 to 10.'
   );
-  assert.ok(out.lines.includes('• The "Score" series shows a consistently decreasing trend.'));
+  assert.ok(out.lines.includes('• The "Score" series shows a consistently decreasing trend, ranging from 1 to 10.'));
+  assert.ok(!out.lines.includes('• The "Score" series shows a consistently decreasing trend.'), "the trend is not repeated");
 });
 
 test("trend: eight rises and a last fall that still ends higher read as a consistent rise", () => {
@@ -78,7 +83,8 @@ test("trend: eight rises and a last fall that still ends higher read as a consis
     out.short,
     'A line chart showing "Score" over 10 categories. The "Score" series shows a consistently increasing trend, ranging from 1 to 9.'
   );
-  assert.ok(out.lines.includes('• The "Score" series shows a consistently increasing trend.'));
+  assert.ok(out.lines.includes('• The "Score" series shows a consistently increasing trend, ranging from 1 to 9.'));
+  assert.ok(!out.lines.includes('• The "Score" series shows a consistently increasing trend.'), "the trend is not repeated");
 });
 
 test("trend: eight rises that end where they began are not a consistent rise", () => {
@@ -130,7 +136,7 @@ test("range: a small value beside a larger one is not spoken as about 0.00", () 
   const out = describe(chart(band(null, ["A", "B", "C"]), [line("Rate", [0.00001, 0.002, 0.004])]));
   assert.equal(
     out.short,
-    'A line chart showing "Rate" over three categories. The "Rate" series shows a consistently increasing trend, ranging from about 0.00001 to 0.004.'
+    'A line chart showing "Rate" over three categories. The "Rate" series rises, ranging from about 0.00001 to 0.004.'
   );
 });
 
@@ -272,4 +278,250 @@ test("noun: year and month labels read as categories in the short sentence and t
       text.startsWith('This line chart shows "Visits" over three categories, from "2024-01" to "2024-03".')
     )
   );
+});
+
+// ---- Fix 6: wording that misled, each with a chart just on the other side of its rule ----
+
+const ZWSP = "​";
+const ZWJ = "‍";
+const scoreLine = (values, categories = label(values.length)) => chart(band(null, categories), [line("Score", values)]);
+const levelBar = (categories, values) => chart(band(null, categories), [bar("Level", values)]);
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+
+test("level: a flat series that ends far from its start is level apart from one large change", () => {
+  const fall = describe(scoreLine([100, 100, 0, 0, 0, 0]));
+  assert.ok(fall.lines.includes('• The "Score" series is mostly level, apart from a large fall.'));
+  assert.equal(fall.lines.filter((text) => text.includes("stable")).length, 0);
+
+  const rise = describe(scoreLine([0, 0, 0, 0, 0, 100]));
+  assert.ok(rise.lines.includes('• The "Score" series is mostly level, apart from a large rise.'));
+});
+
+test("level: a flat series with a small wobble is still stable", () => {
+  const out = describe(scoreLine([10, 10, 10, 10, 10, 10.2, 10, 10]));
+  assert.ok(out.lines.includes('• The "Score" series shows a stable trend.'));
+  assert.equal(out.lines.filter((text) => text.includes("mostly level")).length, 0);
+});
+
+test("fitted: a zigzag whose ends point one way but whose fitted line points the other has no clear trend", () => {
+  const out = describe(scoreLine([0, 9, 2, 8, 1, 7, 0.5, 6, 0.4, 5, 1]));
+  assert.ok(out.lines.includes('• The "Score" series fluctuates with no clear trend.'));
+  assert.equal(out.lines.filter((text) => text.includes("generally increasing")).length, 0);
+});
+
+test("fitted: a rise with a dip along the way is still generally increasing", () => {
+  const out = describe(scoreLine([1, 3, 2, 5, 4, 7, 6, 9]));
+  assert.ok(out.lines.includes('• The "Score" series shows a generally increasing trend, with fluctuations.'));
+});
+
+test("fitted: a zigzag whose ends point up but whose fitted line points down has no clear trend", () => {
+  const out = describe(scoreLine([10, 1, 9, 2, 9, 3, 9, 4, 9, 5, 9.5]));
+  assert.ok(out.lines.includes('• The "Score" series fluctuates with no clear trend.'));
+  assert.equal(out.lines.filter((text) => text.includes("generally decreasing")).length, 0);
+});
+
+test("peak: a peak is said to be well above the average, not significant", () => {
+  const out = describe(scoreLine([1, 3, 2, 5, 4, 7, 6, 9]));
+  assert.equal(
+    out.short,
+    'A line chart showing "Score" over eight categories. The "Score" series peaks at 9 during "L8", well above its average.'
+  );
+  assert.equal(out.lines.filter((text) => text.includes("significantly")).length, 0);
+});
+
+test("steps: two steps are a rise or a fall, and three or more can be a consistent trend", () => {
+  const two = describe(chart(band(null, ["A", "B"]), [line("Score", [9, 3])]));
+  assert.equal(
+    two.short,
+    'A line chart showing "Score" over two categories. The "Score" series falls, ranging from 3 to 9.'
+  );
+  const three = describe(chart(band(null, ["A", "B", "C"]), [line("Score", [9, 6, 3])]));
+  assert.equal(
+    three.short,
+    'A line chart showing "Score" over three categories. The "Score" series falls, ranging from 3 to 9.'
+  );
+  const four = describe(scoreLine([1, 2, 3, 4]));
+  assert.equal(
+    four.short,
+    'A line chart showing "Score" over four categories. The "Score" series shows a consistently increasing trend, ranging from 1 to 4.'
+  );
+  assert.deepEqual(
+    four.lines.filter((text) => text.includes("consistently")),
+    ['• The "Score" series shows a consistently increasing trend, ranging from 1 to 4.']
+  );
+});
+
+test("overall: a start near zero gives the two values, not a percentage of the start", () => {
+  const out = describe(scoreLine([0.5, 40, 60, 80, 100]));
+  assert.ok(out.lines.includes("• Overall, the values go from 0.5 at the start to 100 at the end."));
+  assert.equal(out.lines.filter((text) => text.includes("Overall increase")).length, 0);
+});
+
+test("overall: a start that is not near zero keeps the percentage", () => {
+  const out = describe(scoreLine([5, 40, 60, 80, 100]));
+  assert.ok(out.lines.includes("• Overall increase of 1900.0% from start to end."));
+  assert.equal(out.lines.filter((text) => text.startsWith("• Overall, the values go")).length, 0);
+});
+
+test("overall: values on either side of zero give the two values", () => {
+  const out = describe(scoreLine([-4, -2, 0, 2, 4], DAYS));
+  assert.ok(out.lines.includes("• Overall, the values go from -4 at the start to 4 at the end."));
+});
+
+test("range: a value outside the declared y-axis range is said so", () => {
+  const out = describe({ ...levelBar(DAYS, [-10, 20, 30, 40, 50]), yAxis: { title: "Level", min: 0, max: 100 } });
+  assert.ok(
+    out.lines.includes(
+      'Days are plotted on the x-axis, and the y-axis, "Level", runs from 0 to 100. Some values lie outside the y-axis range.'
+    )
+  );
+});
+
+test("range: values inside, on the edge of, or beyond a reversed y-axis range say nothing", () => {
+  const sentence = 'Days are plotted on the x-axis, and the y-axis, "Level", runs from 0 to 100.';
+  for (const values of [[10, 20, 30, 40, 50], [0, 20, 30, 40, 100]]) {
+    const out = describe({ ...levelBar(DAYS, values), yAxis: { title: "Level", min: 0, max: 100 } });
+    assert.ok(out.lines.includes(sentence));
+  }
+  const reversed = describe({ ...levelBar(DAYS, [10, 20, 30, 40, 50]), yAxis: { title: "Level", min: 100, max: 0 } });
+  assert.equal(reversed.lines.filter((text) => text.includes("outside")).length, 0);
+});
+
+test("blank: a blank label is named by its position everywhere it is spoken", () => {
+  const out = describe(levelBar(["A", "B", "C", ""], [1, 2, 3, 4]));
+  assert.equal(
+    out.short,
+    'A bar chart showing "Level" for four categories. The highest value, 4 at unlabelled category 4, is 60% above the average.'
+  );
+  assert.ok(
+    out.lines.includes(
+      'This bar chart shows "Level" for four categories, from "A" to unlabelled category 4. The chart has one data series.'
+    )
+  );
+  assert.ok(out.lines.includes("• Highest value: 4 (unlabelled category 4)."));
+  assert.ok(out.lines.includes("Unlabelled category 4 | 4"));
+});
+
+test("blank: a blank first label on a line chart reads the same way", () => {
+  const out = describe(chart(band(null, ["", "B", "C", "D"]), [line("Level", [4, 3, 2, 1])]));
+  assert.ok(
+    out.lines.includes(
+      'This line chart shows "Level" over four categories, from unlabelled category 1 to "D". The chart has one data series.'
+    )
+  );
+  assert.ok(out.lines.includes("• The \"Level\" series peaks at 4 (unlabelled category 1)."));
+});
+
+test("blank: labels that are all present keep their quoted names", () => {
+  const out = describe(levelBar(["A", "B", "C", "D"], [1, 2, 3, 4]));
+  assert.ok(
+    out.lines.includes(
+      'This bar chart shows "Level" for four categories, from "A" to "D". The chart has one data series.'
+    )
+  );
+  assert.ok(out.lines.includes('• Highest value: 4 ("D").'));
+});
+
+test("tie: a tie among distinct labels keeps the bracket form", () => {
+  const out = describe(levelBar(DAYS, [1, 5, 2, 5, 3]));
+  assert.ok(out.lines.includes('• Highest value: 5 ("Tue" and "Thu").'));
+});
+
+test("tie: a tie that holds a repeated label puts the positions in the sentence", () => {
+  const out = describe(levelBar(["Mon", "Tue", "Mon", "Wed"], [1, 9, 9, 2]));
+  assert.ok(out.lines.includes('• Highest value: 9, at "Tue" and "Mon" (the third position).'));
+});
+
+test("trend bullet: a consistent trend is not said twice", () => {
+  const out = describe(scoreLine([1, 2, 3, 4, 5], DAYS));
+  assert.deepEqual(
+    out.lines.filter((text) => text.includes("consistently")),
+    ['• The "Score" series shows a consistently increasing trend, ranging from 1 to 5.']
+  );
+});
+
+test("trend bullet: a series whose mean is zero keeps both lines, because the takeaway does not say the trend", () => {
+  const out = describe(scoreLine([-4, -2, 0, 2, 4], DAYS));
+  assert.ok(out.lines.includes('• The "Score" series shows a consistently increasing trend.'));
+});
+
+test("collapse: four tied points on a labelled axis are categories, not points", () => {
+  const out = describe(scoreLine([1, 9, 1, 9, 1, 9, 1, 9]));
+  assert.ok(out.lines.includes('• The "Score" series peaks at 9, at four of the categories.'));
+  const days = describe(levelBar(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], [9, 1, 9, 1, 9, 1, 9]));
+  assert.ok(days.lines.includes("• Highest value: 9 (four of the days)."));
+});
+
+test("collapse: four tied points on a range axis stay points", () => {
+  const out = describe({
+    ...chart({ kind: "range", title: "Mark", min: 0, max: 7 }, [bar("Level", [1, 9, 1, 9, 1, 9, 1, 9])]),
+  });
+  assert.ok(out.lines.includes("• Highest value: 9 (four points)."));
+});
+
+test("series: two series with one name are told apart by their order", () => {
+  const out = describe(chart(band(null, ["A", "B", "C"]), [bar("Total", [1, 2, 3]), line("Total", [3, 2, 1])]));
+  assert.ok(out.lines.includes('• The second "Total" series falls.'));
+  assert.ok(out.lines.includes('• Highest value in the first "Total" series: 3 ("C").'));
+  assert.ok(out.lines.includes("Category | Total (series 1) | Total (series 2)"));
+});
+
+test("series: two series with different names keep their plain names", () => {
+  const out = describe(chart(band(null, ["A", "B", "C"]), [line("North", [1, 2, 3]), line("South", [3, 2, 1])]));
+  assert.ok(out.lines.includes('• The "North" series rises.'));
+  assert.ok(out.lines.includes("Category | North | South"));
+});
+
+// ---- Fix 7: a repeat or a blank is judged on the text without its edge spaces and invisible characters ----
+
+const AUTUMN = (second) => levelBar(["Spring", second, "Autumn", "Winter"], [1, 9, 2, 3]);
+
+test("repeat: a label with a trailing space repeats the label without one", () => {
+  const out = describe(AUTUMN("Autumn "));
+  assert.equal(
+    out.short,
+    'A bar chart showing "Level" for four categories. The highest value, 9 at "Autumn " (the second position), is 140% above the average.'
+  );
+  assert.ok(out.lines.includes('• Highest value: 9 ("Autumn ", the second position).'));
+  assert.ok(out.lines.includes("Autumn  (position 2) | 9"));
+  assert.ok(out.lines.includes("Autumn (position 3) | 2"));
+});
+
+test("repeat: a label with a trailing zero-width space repeats the label without one", () => {
+  const out = describe(AUTUMN(`Autumn${ZWSP}`));
+  assert.equal(
+    out.short,
+    `A bar chart showing "Level" for four categories. The highest value, 9 at "Autumn${ZWSP}" (the second position), is 140% above the average.`
+  );
+  assert.ok(out.lines.includes(`Autumn${ZWSP} (position 2) | 9`));
+  assert.ok(out.lines.includes("Autumn (position 3) | 2"));
+});
+
+test("repeat: a different case or an interior space is a different label", () => {
+  const lower = describe(AUTUMN("autumn"));
+  assert.equal(
+    lower.short,
+    'A bar chart showing "Level" for four categories. The highest value, 9 at "autumn", is 140% above the average.'
+  );
+  assert.ok(lower.lines.includes("autumn | 9"));
+  const interior = describe(levelBar(["Spring", "Late  Autumn", "Late Autumn", "Winter"], [1, 9, 2, 3]));
+  assert.ok(interior.lines.includes("Late  Autumn | 9"));
+});
+
+test("blank: a label of zero-width characters only is blank", () => {
+  const out = describe(levelBar(["Spring", ZWSP, "Autumn", "Winter"], [1, 9, 2, 3]));
+  assert.equal(
+    out.short,
+    'A bar chart showing "Level" for four categories. The highest value, 9 at unlabelled category 2, is 140% above the average.'
+  );
+  assert.ok(out.lines.includes("Unlabelled category 2 | 9"));
+});
+
+test("blank: two blank labels tied for the highest value keep the bracket form", () => {
+  for (const blank of ["", ZWSP + ZWJ, " "]) {
+    const out = describe(levelBar(["A", blank, blank, "D"], [1, 9, 9, 2]));
+    assert.ok(out.lines.includes("• Highest value: 9 (unlabelled category 2 and unlabelled category 3)."), JSON.stringify(blank));
+    assert.ok(out.lines.includes("Unlabelled category 2 | 9"));
+    assert.ok(out.lines.includes("Unlabelled category 3 | 9"));
+  }
 });
