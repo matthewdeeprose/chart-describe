@@ -117,12 +117,21 @@
    * @returns {string} The value as text, with no imposed precision
    */
   function formatValue(value) {
-    return String(value);
+    const written = String(value);
+    // JavaScript switches to exponent form at 1e21 and above, and at 1e-7 and below.
+    const parts = /^(-?)(\d+)(?:\.(\d+))?e([+-]\d+)$/.exec(written);
+    if (!parts) return written;
+    const [, sign, whole, fraction = "", exponent] = parts;
+    const digits = whole + fraction;
+    const point = whole.length + Number(exponent);
+    if (point <= 0) return `${sign}0.${"0".repeat(-point)}${digits}`;
+    if (point >= digits.length) return sign + digits + "0".repeat(point - digits.length);
+    return `${sign}${digits.slice(0, point)}.${digits.slice(point)}`;
   }
 
   // A share this close to a simple fraction IS that fraction: the sum of
   // authored decimals carries floating-point noise (1/3 of 0.3 is not 0.1).
-  const FRACTION_TOLERANCE = 1e-9;
+  const FRACTION_TOLERANCE = 1e-12;
   const SIGNIFICANT_DIGITS = 12;
   // A total with a whole part this long needs more digits to keep its fraction.
   // Float noise from adding values sits beyond the fifteenth digit.
@@ -132,6 +141,11 @@
   const BELOW_ONE_TENTH = "less than 0.1%";
 
   /** The noun for a count: "category" for one, "categories" otherwise. */
+  /** True when the author gave a title: not undefined, null, empty or only spaces. A title of 0 counts. */
+  function hasTitle(title) {
+    return title !== undefined && title !== null && String(title).trim() !== "";
+  }
+
   function categoryNoun(count) {
     return count === 1 ? "category" : "categories";
   }
@@ -180,11 +194,18 @@
   function proportionPhrase(value, total) {
     const fraction = value / total;
     const near = (target) => Math.abs(fraction - target) <= FRACTION_TOLERANCE;
+    // The share as the reader hears it. One that prints as a simple fraction
+    // without being it reads "about", so "50.0%" never sits beside "over half".
+    const printsAs = (target) =>
+      (fraction * 100).toFixed(1) === (target * 100).toFixed(1);
     if (near(1 / 2)) return "exactly half";
+    if (printsAs(1 / 2)) return "about half";
     if (fraction > 1 / 2) return "over half";
     if (near(1 / 3)) return "exactly a third";
+    if (printsAs(1 / 3)) return "about a third";
     if (fraction > 1 / 3) return "over a third";
     if (near(1 / 4)) return "exactly a quarter";
+    if (printsAs(1 / 4)) return "about a quarter";
     if (fraction > 1 / 4) return "over a quarter";
     return "";
   }
@@ -227,10 +248,62 @@
     SMALLEST: "smallest",
   });
 
-  /** A segment's name as the chart author wrote it, a label term over one author run. */
-  function segmentLabel(segment) {
-    const { term, author } = modelCore();
-    return term("label", [author(String(segment.name))]);
+  const UNLABELLED_SEGMENT = "unlabelled segment";
+
+  // A name is blank when it holds only white space and Unicode format characters
+  // (zero-width space, zero-width joiner, word joiner, soft hyphen).
+  const BLANK_NAME = /^[\s\p{Cf}]*$/u;
+  // White space and format characters at either end of a name do not change how it sounds or looks.
+  const NAME_EDGES = /^[\s\p{Cf}]+|[\s\p{Cf}]+$/gu;
+
+  // What buildPieModel learned about each segment BEFORE it sorted them:
+  // declaration position (over ALL segments), whether the name is blank,
+  // whether the name repeats.
+  const SEGMENT_NAMES = new WeakMap();
+
+  function registerSegmentNames(segments) {
+    const counts = new Map();
+    segments.forEach((segment) => {
+      const name = String(segment.name);
+      if (BLANK_NAME.test(name)) return;
+      const key = name.replace(NAME_EDGES, "");
+      counts.set(key, (counts.get(key) || 0) + 1);
+    });
+    segments.forEach((segment, index) => {
+      const name = String(segment.name);
+      const unlabelled = BLANK_NAME.test(name);
+      SEGMENT_NAMES.set(segment, {
+        position: index + 1,
+        unlabelled,
+        // A blank name is never "repeated": it already reads "unlabelled segment N".
+        repeated: !unlabelled && counts.get(name.replace(NAME_EDGES, "")) > 1,
+      });
+    });
+  }
+
+  /**
+   * A segment's name as the chart author wrote it, a label term over one author
+   * run. A blank name is the describer's own phrase, "unlabelled segment N".
+   * A name the chart uses more than once carries its declaration position,
+   * "North (segment 2)", in every place it appears. Author text is never changed.
+   * @param {Object} segment - A segment
+   * @param {Object} [options] - { opening: true } where the name opens a
+   *   sentence or a list item
+   */
+  function segmentLabel(segment, options = {}) {
+    const { text, term, author } = modelCore();
+    const name = String(segment.name);
+    const facts = SEGMENT_NAMES.get(segment);
+    if (facts && facts.unlabelled) {
+      const phrase = `${UNLABELLED_SEGMENT} ${facts.position}`;
+      return term("label", [
+        text(options.opening ? phrase.charAt(0).toUpperCase() + phrase.slice(1) : phrase),
+      ]);
+    }
+    if (facts && facts.repeated) {
+      return term("label", [author(name), text(` (segment ${facts.position})`)]);
+    }
+    return term("label", [author(name)]);
   }
 
   /**
@@ -283,6 +356,16 @@
       text(formatPercentage(largest.value, total)),
     ]);
 
+    // One segment is the whole pie, not the largest of several.
+    if (segments.length === 1) {
+      return [
+        segmentLabel(largest, { opening: true }),
+        text(" is the only segment, at "),
+        percentage,
+        text(" of the total."),
+      ];
+    }
+
     if (ties.allEqual) {
       return [
         text(`${allEqualLead(segments.length)}, at `),
@@ -293,7 +376,11 @@
 
     if (ties.largest.length > 1) {
       return [
-        ...joinRuns(ties.largest.map((segment) => [segmentLabel(segment)])),
+        ...joinRuns(
+          ties.largest.map((segment, index) => [
+            segmentLabel(segment, { opening: index === 0 }),
+          ])
+        ),
         text(" are the joint largest segments, at "),
         percentage,
         text(" each."),
@@ -302,7 +389,7 @@
 
     const proportion = proportionPhrase(largest.value, total);
     return [
-      segmentLabel(largest),
+      segmentLabel(largest, { opening: true }),
       text(" is the largest segment at "),
       percentage,
       ...(proportion
@@ -329,6 +416,8 @@
     const { text, author, term, strong, paragraph, list, item, section } =
       modelCore();
 
+    registerSegmentNames(segments);
+
     // Sort segments by value (descending)
     segments.sort((a, b) => b.value - a.value);
 
@@ -338,19 +427,15 @@
 
     logDebug("Total value across all segments: " + total);
 
-    const titleRuns = title
+    const titleRuns = hasTitle(title)
       ? [text(' titled "'), term("title", [author(String(title))]), text('"')]
       : [];
 
     // 1. The short description. An untitled chart has no "titled" clause.
-    const count = segments.length
-      ? `${countWord(segments.length)} ${categoryNoun(segments.length)}`
-      : "multiple categories";
-    const short = [
-      text("A pie chart"),
-      ...titleRuns,
-      text(` showing the distribution of ${count}.`),
-    ];
+    const countClause = segments.length
+      ? ` showing the distribution of ${countWord(segments.length)} ${categoryNoun(segments.length)}.`
+      : " with no categories.";
+    const short = [text("A pie chart"), ...titleRuns, text(countClause)];
     if (segments.length > 0) {
       short.push(text(" "), ...largestSentence(segments, total));
     }
@@ -373,7 +458,7 @@
         // The author's name, as written. Every section spells a category the
         // same way.
         list(
-          segments.map((segment) => item([segmentLabel(segment)])),
+          segments.map((segment) => item([segmentLabel(segment, { opening: true })])),
           { role: PIE_ROLES.CATEGORIES }
         )
       );
@@ -413,7 +498,7 @@
     // has said so, and a largest and a smallest line would contradict it.
     if (segments.length > 0 && sharesAreStated(segments, total)) {
       const ties = readTies(segments);
-      if (!ties.allEqual) {
+      if (!ties.allEqual && segments.length > 1) {
         insightItems.push(
           extremeItem(PIE_ROLES.LARGEST, "Largest", ties.largest, total),
           extremeItem(PIE_ROLES.SMALLEST, "Smallest", ties.smallest, total)
@@ -427,7 +512,7 @@
     const dataItems = segments.map((segment) =>
       item(
         [
-          segmentLabel(segment),
+          segmentLabel(segment, { opening: true }),
           text(": "),
           term("value", [text(formatValue(segment.value))]),
           ...(statesShares
@@ -465,7 +550,8 @@
       logDebug(
         "Generating pattern analysis for " + segments.length + " segments"
       );
-      sections.push(generatePatternSection(segments, total));
+      const pattern = generatePatternSection(segments, total);
+      if (pattern) sections.push(pattern);
     }
 
     return modelCore().description(short, sections);
@@ -482,25 +568,16 @@
 
     logDebug("Analysing distribution patterns");
 
-    // Calculate distribution characteristics
-    const avgPercentage = (100 / segments.length).toFixed(1);
-
-    logDebug("Distribution analysis - Average: " + avgPercentage + "%");
-
     // This section makes no skewed or balanced judgement: the percentages
-    // above carry the facts, and the average is the one figure they do not
-    // state.
-    const runs = [
-      text("The average segment size is "),
-      term("percentage", [text(`${avgPercentage}%`)]),
-      text("."),
-    ];
+    // above carry the facts, and an average segment size would only restate
+    // 100 divided by the count. The section is left out when it has nothing to say.
+    const runs = [];
 
     // Add group information if there are more than 4 segments
-    if (segments.length > 4) {
+    if (segments.length > 4 && !readTies(segments).allEqual) {
       // Calculate the combined percentage of the smallest segments (bottom half)
-      const bottomHalfIndex = Math.floor(segments.length / 2);
-      const bottomHalf = segments.slice(bottomHalfIndex);
+      const bottomHalfCount = Math.floor(segments.length / 2);
+      const bottomHalf = segments.slice(segments.length - bottomHalfCount);
       const bottomHalfTotal = bottomHalf.reduce(
         (sum, segment) => sum + segment.value,
         0
@@ -518,13 +595,15 @@
       // One space sits between the words. Keep it a plain string: a template
       // literal here would carry its line break and indentation into the text.
       runs.push(
-        text(" The bottom "),
+        text("The bottom "),
         term("count", [text(countWord(bottomHalf.length))]),
         text(" segments collectively represent "),
         term("percentage", [text(bottomHalfPercentage)]),
         text(" of the total.")
       );
     }
+
+    if (runs.length === 0) return null;
 
     return section([paragraph(runs)], {
       role: PIE_ROLES.PATTERNS,
