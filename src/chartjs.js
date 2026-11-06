@@ -97,6 +97,7 @@
     NON_NUMERIC_VALUES: "non-numeric-values",
     MULTI_DATASET_PIE: "multi-dataset-pie",
     PIE_LENGTH_MISMATCH: "pie-length-mismatch",
+    PARTIAL_CIRCLE: "partial-circle",
     BUILDER_ERROR_PREFIX: "builder-error: ",
   });
 
@@ -395,6 +396,26 @@
   /** A dataset with no `type` takes the chart's own type, so only an explicit other type fails. */
   const isPieDataset = (ds) => ds.type === undefined || ds.type === TYPE_PIE;
 
+  /** The sweep, in degrees, of a whole pie. Chart.js draws this when `circumference` is not set. */
+  const FULL_CIRCLE_DEGREES = 360;
+
+  /**
+   * Does Chart.js draw less (or more) than a whole circle? A dataset's own
+   * `circumference` beats the chart's `options.circumference`. A value that is
+   * not set, or is exactly 360, is a whole pie; anything else (a half-circle
+   * gauge, a number the text cannot trust) is not, so the shares of a whole
+   * pie would mislead.
+   * @param {Object} config - A Chart.js config
+   * @returns {boolean} True when the picture is not a whole circle
+   */
+  function drawsPartialCircle(config) {
+    const dataset = config.data.datasets[0] || {};
+    const options = config.options || {};
+    const value = dataset.circumference !== undefined ? dataset.circumference : options.circumference;
+    if (value === undefined || value === null) return false;
+    return value !== FULL_CIRCLE_DEGREES;
+  }
+
   /** Distinct value-axis ids used by the datasets, plus extra scales. */
   function hasMultipleValueAxes(config, horizontal) {
     const idKey = horizontal ? "xAxisID" : "yAxisID";
@@ -463,6 +484,8 @@
       if (!isPieDataset(config.data.datasets[0])) {
         return unsupported(REASONS.UNSUPPORTED_SERIES_TYPE);
       }
+      // A half-circle or other arc is a gauge, not a whole pie.
+      if (drawsPartialCircle(config)) return unsupported(REASONS.PARTIAL_CIRCLE);
       return SUPPORTED;
     }
 

@@ -253,18 +253,22 @@
     return [text('"'), author(String(label)), text('"')];
   }
 
+  /** A label with nothing visible in it: only white space and Unicode format characters (such as a zero-width space). */
+  const BLANK_LABEL = /^[\s\p{Cf}]*$/u;
+
   /**
-   * Is a label empty or whitespace only?
+   * Is a label empty, or made only of white space and format characters?
    *
    * Mermaid keeps `""` rather than falling back to the id (`label ?? name`),
    * so such a label reaches the canvas as an empty string and is drawn as
-   * nothing. There is then no author text to quote.
+   * nothing. A label of zero-width characters is drawn as nothing too. There
+   * is then no author text to quote.
    *
    * @param {string} label - An axis or series label
    * @returns {boolean} True when the label carries no visible text
    */
   function isUnlabelled(label) {
-    return label.trim() === "";
+    return BLANK_LABEL.test(label);
   }
 
   /**
@@ -302,9 +306,60 @@
       : [author(String(label))];
   }
 
-  /** An axis in prose, by its declaration index (from zero). */
-  function axisName(axis, index) {
-    return proseName(axis.label, UNLABELLED_AXIS, index + 1);
+  /** White space and format characters at either end of a label. */
+  const LABEL_EDGES = /^[\s\p{Cf}]+|[\s\p{Cf}]+$/gu;
+
+  /**
+   * The key two labels are compared by. White space and format characters at
+   * either end change neither how a label sounds nor how it looks, so
+   * "Quality " beside "Quality" is a repeat. Case still differs, and
+   * characters inside the label are kept.
+   *
+   * @param {string} label - An axis label
+   * @returns {string} The label with both ends stripped
+   */
+  function repeatKey(label) {
+    return String(label).replace(LABEL_EDGES, "");
+  }
+
+  /**
+   * True when this axis shares its label with another axis, so a reader given
+   * the label alone could not tell which axis is meant. The comparison uses
+   * the author's own text, before escaping, through the repeat key. An
+   * unlabelled axis never counts: it already carries its position in
+   * "unlabelled axis N".
+   *
+   * @param {Object[]} axes - The delivered axes
+   * @param {number} index - The axis, by declaration index (from zero)
+   * @returns {boolean} Whether the label is repeated
+   */
+  function isRepeatedAxisLabel(axes, index) {
+    const label = axes[index].label;
+    if (isUnlabelled(label)) return false;
+    const key = repeatKey(label);
+    return axes.filter((one) => !isUnlabelled(one.label) && repeatKey(one.label) === key).length > 1;
+  }
+
+  /** The position that tells repeated axes apart: " (axis 2)". */
+  function axisPositionText(index) {
+    return ` (axis ${index + 1})`;
+  }
+
+  /** An axis as a TABLE HEADER names it; a repeated label takes its position, as in the prose. */
+  function axisHeaderCell(axes, index) {
+    const { text } = modelCore();
+    const cell = cellName(axes[index].label, UNLABELLED_AXIS, index + 1);
+    return isRepeatedAxisLabel(axes, index) ? [...cell, text(axisPositionText(index))] : cell;
+  }
+
+  /**
+   * An axis in prose, by its declaration index (from zero). A repeated label
+   * takes its position, on EVERY axis that shares it, the first included.
+   */
+  function axisName(axes, index) {
+    const { text } = modelCore();
+    const name = proseName(axes[index].label, UNLABELLED_AXIS, index + 1);
+    return isRepeatedAxisLabel(axes, index) ? [...name, text(axisPositionText(index))] : name;
   }
 
   /** A series in prose; its position is its place among EVERY series. */
@@ -343,8 +398,8 @@
   }
 
   /** An axis name where it opens a nested list item. */
-  function openingAxisName(axis, index) {
-    return capitaliseOpening(axis.label, axisName(axis, index));
+  function openingAxisName(axes, index) {
+    return capitaliseOpening(axes[index].label, axisName(axes, index));
   }
 
   // ---------------------------------------------------------------------
@@ -409,7 +464,7 @@
    */
   function buildAxesSentence(facts) {
     const { text } = modelCore();
-    const labels = facts.axes.map((axis, index) => axisName(axis, index));
+    const labels = facts.axes.map((axis, index) => axisName(facts.axes, index));
     if (facts.N === 0) return [text("There are no axes.")];
     if (facts.N === 1) {
       return [text("The one axis is at the top and is "), ...labels[0], text(".")];
@@ -675,7 +730,7 @@
     const on = (target) =>
       joinRunsNoSerial(
         axes
-          .map((axis, index) => (values[index] === target ? axisName(axis, index) : null))
+          .map((axis, index) => (values[index] === target ? axisName(axes, index) : null))
           .filter((name) => name !== null)
       );
     return [text("Highest on "), ...on(highest), text(", lowest on "), ...on(lowest), text(".")];
@@ -691,7 +746,7 @@
     const { text, list, item } = modelCore();
     return list(
       axes.map((axis, index) =>
-        item([...openingAxisName(axis, index), text(`: ${numberText(values[index])}`)])
+        item([...openingAxisName(axes, index), text(`: ${numberText(values[index])}`)])
       )
     );
   }
@@ -794,7 +849,7 @@
     facts.axes.forEach((axis, index) => {
       const a = first.values[index];
       const b = second.values[index];
-      const name = axisName(axis, index);
+      const name = axisName(facts.axes, index);
       if (a > b) higher.push(name);
       else if (a < b) lower.push(name);
       else equal.push(name);
@@ -825,7 +880,11 @@
         text(" on "),
         ...joinRunsNoSerial(higher),
       ]);
-      if (lower.length > 0) parts.push([text("and lower on "), ...joinRunsNoSerial(lower)]);
+      // With an equal part to follow, "and" belongs to that last part alone.
+      if (lower.length > 0) {
+        const lead = equal.length > 0 ? "lower on " : "and lower on ";
+        parts.push([text(lead), ...joinRunsNoSerial(lower)]);
+      }
     } else {
       parts.push([
         ...subject,
@@ -913,7 +972,7 @@
         ),
       ],
       rows: facts.axes.map((axis, index) => ({
-        header: cellName(axis.label, UNLABELLED_AXIS, index + 1),
+        header: axisHeaderCell(facts.axes, index),
         cells: facts.tabled.map((curve) => [text(numberText(curve.values[index]))]),
       })),
     });
