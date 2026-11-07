@@ -110,7 +110,7 @@ test("turn: 820, 910, 1040, 980, 760, 640 says rises, then falls in the bullet a
     result.short,
     'A line chart showing "Main library" over six months. The "Main library" series rises to a peak at "Mar", then falls, with values between 640 and 1040.',
   );
-  assert.ok(result.lines.includes('• The "Main library" series rises, then falls.'));
+  assert.ok(result.lines.includes('• The "Main library" series rises to a peak at "Mar", then falls, with values between 640 and 1040.'));
   assert.ok(!result.lines.some((text) => text.includes("generally decreasing")));
 });
 
@@ -120,7 +120,7 @@ test("turn: a valley says falls to a low in the short sentence and falls, then r
     result.short,
     'A line chart showing "Rainfall" over six months. The "Rainfall" series falls to a low at "Apr", then rises, with values between 610 and 830.',
   );
-  assert.ok(result.lines.includes('• The "Rainfall" series falls, then rises.'));
+  assert.ok(result.lines.includes('• The "Rainfall" series falls to a low at "Apr", then rises, with values between 610 and 830.'));
 });
 
 test("turn: a flat top names both months", () => {
@@ -128,25 +128,27 @@ test("turn: a flat top names both months", () => {
   assert.ok(
     result.short.includes('The "Visits" series rises to a peak at "Mar" and "Apr", then falls, with values between 10 and 30.'),
   );
-  assert.ok(result.lines.includes('• The "Visits" series rises, then falls.'));
+  assert.ok(
+    result.lines.includes('• The "Visits" series rises to a peak at "Mar" and "Apr", then falls, with values between 10 and 30.'),
+  );
 });
 
 test("turn: a step back of 7.5% of the range is still one hill", () => {
   const result = describe(chart(band(null, MONTHS), [line("Visits", [110, 135, 132, 150, 130, 112])]));
   assert.ok(result.short.includes('rises to a peak at "Apr", then falls'));
-  assert.ok(result.lines.includes('• The "Visits" series rises, then falls.'));
+  assert.ok(result.lines.includes('• The "Visits" series rises to a peak at "Apr", then falls, with values between 110 and 150.'));
 });
 
 test("turn: a step back of 14% of the range is not one hill, and the old wording stays", () => {
   const result = describe(chart(band(null, MONTHS), [line("Visits", [110, 130, 125, 145, 140, 120])]));
   assert.ok(result.short.includes('The "Visits" series is generally increasing with fluctuations, with values between 110 and 145.'));
-  assert.ok(result.lines.includes('• The "Visits" series shows a generally increasing trend, with fluctuations.'));
+  assert.ok(result.lines.includes('• The "Visits" series is generally increasing with fluctuations, with values between 110 and 145.'));
 });
 
 test("turn: two humps keep the old wording", () => {
   const result = describe(chart(band(null, MONTHS), [line("Visits", [110, 140, 115, 145, 112, 130])]));
   assert.ok(result.short.includes("is generally increasing with fluctuations"));
-  assert.ok(result.lines.includes('• The "Visits" series shows a generally increasing trend, with fluctuations.'));
+  assert.ok(result.lines.includes('• The "Visits" series is generally increasing with fluctuations, with values between 110 and 145.'));
 });
 
 test("turn: a symmetric hill (5, 10, 15, 10, 5) no longer reads as no clear trend", () => {

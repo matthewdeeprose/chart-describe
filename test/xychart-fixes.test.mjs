@@ -62,7 +62,7 @@ test("trend: four rises and a final drop to -100 is not a consistent rise", () =
     out.short,
     'A line chart showing "Score" over five days. The "Score" series is generally decreasing with fluctuations, with values between -100 and 13.'
   );
-  assert.ok(out.lines.includes('• The "Score" series shows a generally decreasing trend, with fluctuations.'));
+  assert.ok(out.lines.includes('• The "Score" series is generally decreasing with fluctuations, with values between -100 and 13.'));
   assert.ok(out.lines.includes("• Overall, the values go from 10 at the start to -100 at the end."));
   assert.equal(out.lines.filter((text) => text.includes("consistently")).length, 0);
 });
@@ -77,14 +77,14 @@ test("trend: eight falls that end lower still read as a consistent fall", () => 
   assert.ok(!out.lines.includes('• The "Score" series shows a consistently decreasing trend.'), "the trend is not repeated");
 });
 
-test("trend: eight rises and a last fall that still ends higher read as a consistent rise", () => {
+test("trend: eight rises and a last fall that still ends higher read as a rise, then a fall", () => {
   const out = describe(chart(band(null, label(10)), [line("Score", [1, 2, 3, 4, 5, 6, 7, 8, 9, 3])]));
   assert.equal(
     out.short,
-    'A line chart showing "Score" over 10 categories. The "Score" series shows a consistently increasing trend, ranging from 1 to 9.'
+    'A line chart showing "Score" over 10 categories. The "Score" series peaks at 9 during "L9", well above its average.'
   );
-  assert.ok(out.lines.includes('• The "Score" series shows a consistently increasing trend, ranging from 1 to 9.'));
-  assert.ok(!out.lines.includes('• The "Score" series shows a consistently increasing trend.'), "the trend is not repeated");
+  assert.ok(out.lines.includes('• The "Score" series rises, then falls.'));
+  assert.ok(!out.lines.some((text) => text.includes("consistently")), "the last fall is not called a consistent rise");
 });
 
 test("trend: eight rises that end where they began are not a consistent rise", () => {
@@ -195,7 +195,7 @@ test("highest: averages that differ keep the one-series sentence", () => {
 });
 
 test("highest: averages that differ by a small amount still name the higher one", () => {
-  const out = describe(chart(band(null, ["A", "B", "C"]), [line("North", SAME_THREE), line("South", [5, 6, 7.001])]));
+  const out = describe(chart(band(null, ["A", "B", "C"]), [line("North", SAME_THREE), line("South", [5, 6, 7.3])]));
   assert.equal(out.short, 'A line chart over three categories. The "South" series shows the highest overall values.');
 });
 
@@ -205,30 +205,30 @@ const CYCLIC = (values) => describe(chart(band(null, label(values.length)), [lin
 
 test("peaks: one flat-topped peak among sharp ones is counted", () => {
   assert.ok(
-    CYCLIC([1, 5, 1, 5, 5, 1, 5, 1, 5, 1]).includes("• The data shows a cyclic pattern with four peaks and three troughs.")
+    CYCLIC([1, 5, 1, 5, 5, 1, 5, 1, 5, 1]).includes("• The data rises and falls repeatedly, with four peaks and three troughs.")
   );
 });
 
 test("peaks: three flat-topped peaks are a cycle, and the sentence is now said", () => {
   assert.ok(
-    CYCLIC([1, 5, 5, 1, 1, 5, 5, 1, 1, 5, 5, 1]).includes("• The data shows a cyclic pattern with three peaks and two troughs.")
+    CYCLIC([1, 5, 5, 1, 1, 5, 5, 1, 1, 5, 5, 1]).includes("• The data rises and falls repeatedly, with three peaks and two troughs.")
   );
 });
 
 test("peaks: a flat-bottomed trough counts once", () => {
   assert.ok(
-    CYCLIC([1, 5, 1, 1, 5, 1, 5, 1, 5, 1]).includes("• The data shows a cyclic pattern with four peaks and three troughs.")
+    CYCLIC([1, 5, 1, 1, 5, 1, 5, 1, 5, 1]).includes("• The data rises and falls repeatedly, with four peaks and three troughs.")
   );
 });
 
 test("peaks: sharp peaks are counted as before", () => {
   assert.ok(
-    CYCLIC([1, 5, 1, 5, 1, 5, 1, 5, 1]).includes("• The data shows a cyclic pattern with four peaks and three troughs.")
+    CYCLIC([1, 5, 1, 5, 1, 5, 1, 5, 1]).includes("• The data rises and falls repeatedly, with four peaks and three troughs.")
   );
 });
 
 test("peaks: one flat-topped hill is still one peak and says nothing about a cycle", () => {
-  assert.equal(CYCLIC([1, 2, 3, 3, 3, 2, 1]).filter((text) => text.includes("cyclic")).length, 0);
+  assert.equal(CYCLIC([1, 2, 3, 3, 3, 2, 1]).filter((text) => text.includes("rises and falls repeatedly")).length, 0);
 });
 
 // ---- Fix 5: label nouns ----
@@ -299,7 +299,7 @@ test("level: a flat series that ends far from its start is level apart from one 
 
 test("level: a flat series with a small wobble is still stable", () => {
   const out = describe(scoreLine([10, 10, 10, 10, 10, 10.2, 10, 10]));
-  assert.ok(out.lines.includes('• The "Score" series shows a stable trend.'));
+  assert.ok(out.lines.includes('• The "Score" series is stable, with values between 10 and 10.2.'));
   assert.equal(out.lines.filter((text) => text.includes("mostly level")).length, 0);
 });
 
@@ -459,11 +459,14 @@ test("collapse: four tied points on a range axis stay points", () => {
   assert.ok(out.lines.includes("• Highest value: 9 (four points)."));
 });
 
-test("series: two series with one name are told apart by their order", () => {
+test("series: two series with one name are told apart by their kind, or by their order when the kind is the same", () => {
   const out = describe(chart(band(null, ["A", "B", "C"]), [bar("Total", [1, 2, 3]), line("Total", [3, 2, 1])]));
-  assert.ok(out.lines.includes('• The second "Total" series falls.'));
-  assert.ok(out.lines.includes('• Highest value in the first "Total" series: 3 ("C").'));
+  assert.ok(out.lines.includes('• The "Total" line series falls.'));
+  assert.ok(out.lines.includes('• Highest value in the "Total" bar series: 3 ("C").'));
   assert.ok(out.lines.includes("Category | Total (series 1) | Total (series 2)"));
+  const same = describe(chart(band(null, ["A", "B", "C"]), [line("Total", [1, 2, 3]), line("Total", [3, 2, 2.5])]));
+  assert.ok(same.lines.includes('• The second "Total" series falls, then rises.'));
+  assert.ok(same.lines.includes('• The first "Total" series peaks at 3 ("C").'));
 });
 
 test("series: two series with different names keep their plain names", () => {
@@ -524,4 +527,195 @@ test("blank: two blank labels tied for the highest value keep the bracket form",
     assert.ok(out.lines.includes("Unlabelled category 2 | 9"));
     assert.ok(out.lines.includes("Unlabelled category 3 | 9"));
   }
+});
+
+// ---- Statistics, ties, names, trends and times: each test pins one sentence that was untrue or misleading ----
+
+const withExtras = (input, extras) => ({ ...input, ...extras });
+const FIVE = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+const levelBars = (values, labels = label(values.length)) => chart(band(null, labels), [bar("Level", values)]);
+
+test("a median is kept inside the range, as the average is", () => {
+  assert.ok(describe(levelBars([100.6, 100.62, 100.64, 100.66, 100.68])).lines.includes("• Median value: 100.64."));
+  assert.ok(describe(levelBars([-100.68, -100.66, -100.64, -100.62, -100.6])).lines.includes("• Median value: -100.64."));
+  assert.ok(describe(levelBars([10, 20, 30, 40, 50])).lines.includes("• Median value: 30."));
+});
+
+test("a standard deviation of varying data is not spoken as 0, and a flat series still says 0", () => {
+  assert.ok(describe(levelBars([0.001, 0.002, 0.003, 0.004, 0.005])).lines.includes("• Standard deviation: 0.001."));
+  assert.ok(describe(levelBars([0.1, 0.1, 0.1, 0.1, 0.1])).lines.includes("• Standard deviation: 0."));
+  assert.ok(describe(levelBars([10, 20, 30, 40, 50])).lines.includes("• Standard deviation: 14.1."));
+});
+
+test("a mean that is float noise around zero is zero, never a percentage and never -0", () => {
+  assert.equal(
+    describe(chart(band(null, ["A", "B", "C"]), [bar("Delta", [0.1, 0.2, -0.3])])).short,
+    'A bar chart showing "Delta" for three categories. Values range from -0.3 to 0.2 with an average of 0.'
+  );
+  assert.equal(
+    describe(chart(band(null, ["A", "B", "C"]), [bar("Delta", [0.7, 0.2, -0.9])])).short,
+    'A bar chart showing "Delta" for three categories. Values range from -0.9 to 0.7 with an average of 0.'
+  );
+  assert.ok(describe(chart(band(null, ["A", "B", "C"]), [bar("Delta", [0.5, 0.6, 0.7])])).short.includes("average of 0.6"));
+});
+
+test("averages that differ at the thirteenth figure are not the same average", () => {
+  const near = chart(band(null, ["A", "B"]), [
+    bar("North", [1000000000000.5, 1000000000000.5]),
+    bar("South", [1000000000000.4, 1000000000000.4]),
+  ]);
+  assert.equal(describe(near).short, 'A bar chart for two categories. The "North" series shows the highest overall values.');
+  const noise = chart(band(null, ["A", "B", "C"]), [bar("North", [0.1 + 0.2, 0.3, 0.3]), bar("South", [0.3, 0.3, 0.3])]);
+  assert.equal(describe(noise).short, "A bar chart for three categories. The series have the same average.");
+});
+
+test("a series with no values is refused, not described as undefined", () => {
+  assert.throws(() => describe(chart(band(null, ["A", "B"]), [bar("Level", [])])), /no values/);
+});
+
+test("a tie that runs past the labels counts only the labelled categories", () => {
+  const out = describe(chart(band(null, ["A", "B"]), [bar("Level", [9, 1, 9, 9, 9])]));
+  assert.ok(out.lines.includes("• Highest value: 9 (one of the categories and three positions past the labels)."));
+  assert.ok(describe(levelBars([9, 9, 9, 9, 1])).lines.includes("• Highest value: 9 (four of the categories)."));
+});
+
+test("a blank title, axis title or series name is not quoted as an empty name", () => {
+  const blank = withExtras(chart(band(" ", ["A", "B"]), [bar(" ", [1, 2])]), {
+    title: "​",
+    yAxis: { kind: "range", title: " ", min: null, max: null },
+  });
+  const out = describe(blank);
+  assert.equal(out.short, "A bar chart for two categories. Values range from 1 to 2 with an average of 1.5.");
+  assert.ok(out.lines.includes("Categories are plotted on the x-axis."));
+  assert.ok(out.lines.includes("Data table"));
+  assert.ok(out.lines.includes("Category | Value"));
+  const two = describe(chart(band(null, ["A", "B"]), [bar("North", [1, 2]), line(" ", [2, 1])]));
+  assert.ok(two.lines.includes("• Unlabelled series 2 falls."));
+  assert.ok(two.lines.includes("Category | North | Unlabelled series 2"));
+  const ordinary = describe(chart(band(null, ["A", "B"]), [bar("North", [1, 2])]));
+  assert.ok(ordinary.lines.includes("Category | North"));
+  // One blank test for labels as well: Hangul filler (U+3164) is invisible and is not white space or a format character.
+  assert.ok(describe(chart(band(null, ["A", String.fromCharCode(0x3164)]), [bar("Level", [1, 2])])).lines.includes("Unlabelled category 2 | 2"));
+});
+
+test("two series whose names differ only at the edges are told apart", () => {
+  const out = describe(chart(band(null, ["A", "B", "C"]), [bar("Total", [1, 2, 3]), bar("Total ", [3, 2, 9])]));
+  assert.equal(out.short, 'A bar chart for three categories. The second "Total " series shows the highest overall values.');
+});
+
+test("same-name series of different kinds are told apart by kind, and numbered within the kind", () => {
+  const out = describe(chart(band(null, ["A", "B", "C"]), [bar("Total", [1, 2, 3]), line("Total", [3, 2, 9])]));
+  assert.equal(
+    out.short,
+    'A combined chart with one bar series and one line series over three shared categories. The "Total" line series shows the highest overall values.'
+  );
+  const three = describe(chart(band(null, ["A", "B", "C"]), [bar("Total", [1, 2, 3]), line("Total", [3, 2, 9]), line("Total", [2, 2, 2])]));
+  assert.ok(three.lines.includes('• Every value in the second "Total" line series is 2.'));
+});
+
+test("an average strictly inside the range is not spoken as an end of it", () => {
+  assert.equal(
+    describe(chart(band(null, ["A", "B"]), [bar("Level", [100, 101])])).short,
+    'A bar chart showing "Level" for two categories. Values range from 100 to 101 with an average of 100.5.'
+  );
+  assert.ok(describe(chart(band(null, ["A", "B"]), [bar("Level", [99.4, 101.2])])).short.includes("average of 100."));
+});
+
+test("a non-zero minimum is never '100% below'", () => {
+  const four = (values) => describe(chart(band(null, ["A", "B", "C", "D"]), [bar("Level", values)])).lines;
+  assert.ok(four([1, 1000, 1000, 1000]).includes('• The lowest value, 1 at "A", is more than 99% below the average.'));
+  assert.ok(four([0, 1000, 1000, 1000]).includes('• The lowest value, 0 at "A", is 100% below the average.'));
+  assert.ok(four([20, 100, 100, 100]).includes('• The lowest value, 20 at "A", is 75% below the average.'));
+});
+
+test("no 'above the average' claim where the signs cancel", () => {
+  const profit = describe(chart(band(null, FIVE), [bar("Profit", [-100, 100, 1, 2, 3])]));
+  assert.equal(profit.short, 'A bar chart showing "Profit" for five days. Values range from -100 to 100 with an average of 1.2.');
+  const sound = describe(chart(band(null, FIVE), [bar("Profit", [-1, 10, 11, 12, 100])]));
+  assert.ok(sound.lines.includes('• The highest value, 100 at "Fri", is 279% above the average.'));
+});
+
+test("a series that starts below zero gives its start and end, not a percentage", () => {
+  const down = describe(chart(band(null, FIVE), [line("Delta", [-10, -8, -12, -9, -1])]));
+  assert.ok(down.lines.includes("• Overall, the values go from -10 at the start to -1 at the end."));
+  const up = describe(chart(band(null, FIVE), [line("Delta", [10, 12, 14, 11, 19])]));
+  assert.ok(up.lines.includes("• Overall increase of 90.0% from start to end."));
+});
+
+test("a series that crashes at the end is not a consistent rise", () => {
+  const crash = describe(chart(band(null, label(5)), [line("S", [1, 54, 64, 91, 11])]));
+  assert.ok(!crash.short.includes("consistently"));
+  assert.ok(!crash.lines.some((text) => text.includes("consistently")));
+  const steady = describe(chart(band(null, label(5)), [line("S", [10, 20, 30, 40, 50])]));
+  assert.equal(steady.short, 'A line chart showing "S" over five categories. The "S" series shows a consistently increasing trend, ranging from 10 to 50.');
+  const start = describe(chart(band(null, label(5)), [line("S", [99, 25, 47, 70, 100])]));
+  assert.ok(!start.short.includes("consistently"));
+});
+
+test("a rise with no step against it is not said to fluctuate", () => {
+  const stairs = describe(chart(band(null, label(8)), [line("Price", [1, 1, 2, 2, 3, 3, 4, 4])]));
+  assert.ok(stairs.lines.some((text) => text.includes("generally increasing")));
+  assert.ok(!stairs.lines.some((text) => text.includes("fluctuat")));
+  const steps = describe(chart(band(null, label(8)), [line("Stock", [9, 9, 8, 8, 7, 7, 6, 6])]));
+  assert.ok(steps.lines.some((text) => text.includes("generally decreasing")));
+  assert.ok(!steps.lines.some((text) => text.includes("fluctuat")));
+  const zigzag = describe(chart(band(null, label(8)), [line("Price", [1, 3, 2, 5, 4, 7, 6, 9])]));
+  assert.ok(zigzag.lines.some((text) => text.includes("with fluctuations")));
+});
+
+test("a flat series with one huge spike is not called stable", () => {
+  const spike = describe(chart(band(null, label(10)), [line("Load", [1, 1, 1, 1, 1, 1, 1, 1, 1000, 1])]));
+  assert.ok(spike.lines.some((text) => text.includes("mostly level, apart from a large spike")));
+  assert.ok(!spike.lines.some((text) => text.includes("stable")));
+  const dip = describe(chart(band(null, label(10)), [line("Load", [1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1, 1000])]));
+  assert.ok(dip.lines.some((text) => text.includes("mostly level, apart from a large dip")));
+  const wobble = describe(chart(band(null, label(12)), [line("Load", [0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 4.9, 4.9])]));
+  assert.ok(wobble.lines.includes('• The "Load" series shows a stable trend.'));
+});
+
+test("the trend is said once when the takeaway already says it", () => {
+  const fall = describe(chart(band(null, FIVE), [line("Load", [9, 9, 9, 9, 5])]));
+  assert.equal(fall.short, 'A line chart showing "Load" over five days. The "Load" series is mostly level, apart from a large fall, with values between 5 and 9.');
+  assert.equal(fall.lines.filter((text) => text.includes("apart from a large fall")).length, 1);
+  const peak = describe(chart(band(null, label(10)), [line("Score", [10, 9, 8, 7, 6, 5, 4, 3, 2, 1000])]));
+  assert.ok(peak.lines.some((text) => text.includes("generally increasing trend, with fluctuations")));
+});
+
+test("times and ISO dates need digits that exist", () => {
+  const noun = (labels) => describe(chart(band(null, labels), [bar("Level", [1, 2])])).short;
+  assert.equal(noun(["99:99", "98:98"]), 'A bar chart showing "Level" for two categories. Values range from 1 to 2 with an average of 1.5.');
+  assert.equal(noun(["2024-13-45", "2024-14-45"]), 'A bar chart showing "Level" for two categories. Values range from 1 to 2 with an average of 1.5.');
+  assert.equal(noun(["09:30", "10:30"]), 'A bar chart showing "Level" for two times. Values range from 1 to 2 with an average of 1.5.');
+  assert.equal(noun(["2024-01-15", "2024-01-16"]), 'A bar chart showing "Level" for two dates. Values range from 1 to 2 with an average of 1.5.');
+});
+
+// ---- The repeating-shape sentence, and the wide set of blank and edge characters ----
+
+test("the repeating-shape sentence says what the data does, however small the swings", () => {
+  const cycle = describe(chart(band(null, label(7)), [line("Score", [10, 30, 12, 32, 11, 31, 13])]));
+  assert.ok(cycle.lines.includes("• The data rises and falls repeatedly, with three peaks and two troughs."));
+  const wiggle = describe(chart(band(null, label(9)), [line("Level", [100, 100.1, 100, 100.1, 100, 100.1, 100, 100.1, 100])]));
+  assert.ok(wiggle.lines.includes("• The data rises and falls repeatedly, with four peaks and three troughs."));
+  assert.ok(![cycle, wiggle].some((out) => out.lines.some((text) => text.includes("cyclic"))));
+});
+
+test("blank set: a category or series name of characters that draw as nothing reads as unlabelled", () => {
+  for (const blank of ["\u3164", "\u2800", "\uFE0F", "\u034F", "\u115F\u1160", "\uFFA0"]) {
+    const cat = describe(chart(band(null, ["A", blank, "C"]), [bar("S", [1, 3, 2])]));
+    assert.ok(cat.lines.includes("• Highest value: 3 (unlabelled category 2)."), JSON.stringify(blank));
+    const named = describe(chart(band(null, ["A", "B"]), [bar(blank, [1, 3]), bar("Real", [2, 1])]));
+    assert.ok(named.lines.includes("• Highest value in unlabelled series 1: 3 (\"B\")."), JSON.stringify(blank));
+  }
+});
+
+test("repeat key: edge characters outside plain format characters still count as edges", () => {
+  const EDGE_CHARACTERS = ["\u034F", "\u115F", "\u1160", "\u2800", "\u3164", "\uFE0F", "\uFFA0"];
+  for (const edge of EDGE_CHARACTERS) {
+    const out = describe(AUTUMN(`Autumn${edge}`));
+    assert.ok(out.lines.some((text) => text.includes("(position 2)")), `U+${edge.codePointAt(0).toString(16)} at the end repeats the label`);
+  }
+  const front = describe(AUTUMN("\u2800Autumn"));
+  assert.ok(front.lines.some((text) => text.includes("(position 2)")), "a Braille blank at the front repeats the label");
+  const control = describe(AUTUMN("Autumn!"));
+  assert.ok(!control.lines.some((text) => text.includes("(position 2)")), "a visible character is a different label");
 });

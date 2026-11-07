@@ -145,9 +145,13 @@
     STABLE: "stable",
     UP_NOISY: "generally increasing with fluctuations",
     DOWN_NOISY: "generally decreasing with fluctuations",
+    UP_STEPPED: "generally increasing",
+    DOWN_STEPPED: "generally decreasing",
     NONE: "fluctuating with no clear trend",
     LEVEL_RISE: "mostly level, apart from a large rise",
     LEVEL_FALL: "mostly level, apart from a large fall",
+    LEVEL_SPIKE: "mostly level, apart from a large spike",
+    LEVEL_DIP: "mostly level, apart from a large dip",
     RISES: "rising",
     FALLS: "falling",
     UNKNOWN: "unknown",
@@ -166,9 +170,13 @@
     [TRENDS.UP_NOISY]: "shows a generally increasing trend, with fluctuations",
     [TRENDS.DOWN_NOISY]:
       "shows a generally decreasing trend, with fluctuations",
+    [TRENDS.UP_STEPPED]: "shows a generally increasing trend",
+    [TRENDS.DOWN_STEPPED]: "shows a generally decreasing trend",
     [TRENDS.NONE]: "fluctuates with no clear trend",
     [TRENDS.LEVEL_RISE]: "is mostly level, apart from a large rise",
     [TRENDS.LEVEL_FALL]: "is mostly level, apart from a large fall",
+    [TRENDS.LEVEL_SPIKE]: "is mostly level, apart from a large spike",
+    [TRENDS.LEVEL_DIP]: "is mostly level, apart from a large dip",
     [TRENDS.RISES]: "rises",
     [TRENDS.FALLS]: "falls",
   });
@@ -208,6 +216,9 @@
   const LOW_POINT_RATIO = 0.5;
   const SKEW_TOLERANCE = 0.2;
   const OVERALL_CHANGE_MIN_PERCENT = 50;
+  // With a negative value in the series, the average must be at least this share of the largest absolute value
+  // before a value is called a percentage above it (the signs cancel, and the average stops meaning "typical").
+  const MIXED_SIGN_MEAN_MIN_SHARE = 0.1;
   // A start smaller than this share of the series' largest absolute value is "near zero".
   const NEAR_ZERO_START_SHARE = 0.01;
 
@@ -263,7 +274,10 @@
   const MAX_RESTORED_DECIMALS = 15;
 
   // Two series averages that agree to this many significant figures are equal.
-  const MEAN_COMPARE_DIGITS = 12;
+  const MEAN_COMPARE_REL_GAP = 1e-14;
+
+  // A mean smaller than this share of the largest absolute value is rounding noise from summing decimals (0.1 + 0.2 - 0.3).
+  const MEAN_NOISE_SHARE = 1e-12;
 
   // A bare four-digit label is called a year only inside this span. A run such
   // as 1000, 2000, 3000 is a set of bins, and the neutral noun is the true one.
@@ -381,6 +395,27 @@
     return !dotted || found[5].length === 4;
   }
 
+  // A time of day: hours 0 to 23 (1 to 12 beside am or pm), minutes and seconds 0 to 59.
+  function isClockTime(lower) {
+    const found = /^(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s?(am|pm))?$/.exec(lower);
+    if (found) {
+      const hour = Number(found[1]);
+      const hourOk = found[4] ? hour >= 1 && hour <= 12 : hour <= 23;
+      return hourOk && Number(found[2]) <= 59 && (found[3] === undefined || Number(found[3]) <= 59);
+    }
+    const bare = /^(\d{1,2})\s?(?:am|pm)$/.exec(lower);
+    return !!bare && Number(bare[1]) >= 1 && Number(bare[1]) <= 12;
+  }
+
+  // An ISO date: a month from 1 to DATE_MONTH_MAX and a day from 1 to DATE_DAY_MAX.
+  function isIsoDate(lower) {
+    const found = /^\d{4}-(\d{2})-(\d{2})$/.exec(lower);
+    if (!found) return false;
+    const month = Number(found[1]);
+    const day = Number(found[2]);
+    return month >= 1 && month <= DATE_MONTH_MAX && day >= 1 && day <= DATE_DAY_MAX;
+  }
+
   const LABEL_SHAPES = Object.freeze([
     {
       singular: "Day",
@@ -425,17 +460,14 @@
     {
       singular: "Time",
       plural: "times",
-      test: (label) =>
-        /^\d{1,2}:\d{2}(?::\d{2})?(?:\s?(?:am|pm))?$/.test(
-          label.toLowerCase()
-        ) || /^\d{1,2}\s?(?:am|pm)$/.test(label.toLowerCase()),
+      test: (label) => isClockTime(label.toLowerCase()),
     },
     {
       singular: "Date",
       plural: "dates",
       test: (label) => {
         const lower = label.toLowerCase();
-        if (/^\d{4}-\d{2}-\d{2}$/.test(lower)) return true;
+        if (isIsoDate(lower)) return true;
         if (isNumericDate(lower)) return true;
         return new RegExp(
           `^\\d{1,2}\\s${MONTH_ALTERNATION}(?:\\s\\d{2}(?:\\d{2})?)?$`
@@ -592,7 +624,8 @@
         : magnitude >= 10
           ? value.toFixed(1)
           : value.toFixed(2);
-    return dropTrailingZeros(banded);
+    const spoken = dropTrailingZeros(banded);
+    return spoken === "-0" ? "0" : spoken;
   }
 
   /**
@@ -639,11 +672,34 @@
     if (!Number.isFinite(mean) || !Number.isFinite(min) || !Number.isFinite(max)) {
       return banded;
     }
-    const inside = (text) => Number(text) >= min && Number(text) <= max;
+    const strictlyInside = mean > min && mean < max;
+    const inside = (text) => {
+      const spoken = Number(text);
+      if (strictlyInside && (spoken === min || spoken === max)) return false;
+      return spoken >= min && spoken <= max;
+    };
     if (inside(banded)) return banded;
     for (let decimals = 0; decimals <= MAX_RESTORED_DECIMALS; decimals += 1) {
       const restored = dropTrailingZeros(mean.toFixed(decimals));
       if (inside(restored)) return restored;
+    }
+    return banded;
+  }
+
+  /**
+   * A standard deviation as it is spoken. Data that varies never has a spread spoken as zero: decimals are added
+   * until a non-zero figure appears. A series with no variance is zero, whatever float noise the mean carries.
+   * @param {Object} stats - Statistics from computeStatistics
+   * @returns {string} The spread as it is spoken
+   */
+  function formatSpread(stats) {
+    const spread = stats.standardDeviation;
+    if (stats.max === stats.min) return "0";
+    const banded = formatDerivedValue(spread);
+    if (!(spread > 0) || Number(banded) !== 0) return banded;
+    for (let decimals = 0; decimals <= MAX_RESTORED_DECIMALS; decimals += 1) {
+      const restored = dropTrailingZeros(spread.toFixed(decimals));
+      if (Number(restored) !== 0) return restored;
     }
     return banded;
   }
@@ -684,8 +740,11 @@
    */
   function computeStatistics(values) {
     const count = values.length;
+    if (count === 0) throw new Error("xychart: a series has no values");
     const total = values.reduce((sum, value) => sum + value, 0);
-    const mean = count > 0 ? total / count : 0;
+    const rawMean = count > 0 ? total / count : 0;
+    const largest = values.reduce((most, value) => Math.max(most, Math.abs(value)), 0);
+    const mean = Math.abs(rawMean) <= MEAN_NOISE_SHARE * largest ? 0 : rawMean;
 
     let maxIndex = 0;
     let minIndex = 0;
@@ -761,6 +820,13 @@
   const STABLE_NET_RANGE_SHARE = 0.5;
   // Fewer steps than this cannot be called a consistent trend.
   const TREND_MIN_STEPS = 3;
+  // A mostly flat series whose range is more than this share of its largest absolute value has a spike or a dip, not a wobble.
+  const LEVEL_SPIKE_MIN_SHARE = 0.5;
+  // ...and its highest (or lowest) value sticks out of BOTH end values by more than this share of the range.
+  const LEVEL_SPIKE_STICK_OUT = 0.75;
+  // "Consistently" also needs the end points to sit near the extremes: within this share of the range of the high (or low) at the end,
+  // and of the low (or high) at the start.
+  const CONSISTENT_END_SHARE = 0.25;
   // A generally-increasing or decreasing trend needs a fitted line that agrees with the end points and rises
   // (or falls) by at least this share of the range across the whole series.
   const FITTED_RISE_MIN_SHARE = 0.1;
@@ -817,13 +883,24 @@
       if (positive === steps && overall > 0) return TRENDS.RISES;
       if (negative === steps && overall < 0) return TRENDS.FALLS;
     }
-    if (positive > TREND_DOMINANCE * steps && overall > 0) return TRENDS.UP;
-    if (negative > TREND_DOMINANCE * steps && overall < 0) return TRENDS.DOWN;
+    const high = Math.max(...values);
+    const low = Math.min(...values);
+    const reach = CONSISTENT_END_SHARE * (high - low);
+    const first = values[0];
+    const last = values[values.length - 1];
+    if (positive > TREND_DOMINANCE * steps && overall > 0 && high - last <= reach && first - low <= reach) return TRENDS.UP;
+    if (negative > TREND_DOMINANCE * steps && overall < 0 && last - low <= reach && high - first <= reach) return TRENDS.DOWN;
     if (unchanged > TREND_DOMINANCE * steps) {
       // Mostly flat steps, but the series ends far from where it began, so it is not "stable".
       const range = Math.max(...values) - Math.min(...values);
       if (range > 0 && Math.abs(overall) > STABLE_NET_RANGE_SHARE * range) {
         return overall > 0 ? TRENDS.LEVEL_RISE : TRENDS.LEVEL_FALL;
+      }
+      const scale = Math.max(...values.map((value) => Math.abs(value)));
+      if (range > LEVEL_SPIKE_MIN_SHARE * scale) {
+        const ends = [values[0], values[values.length - 1]];
+        if (Math.max(...values) - Math.max(...ends) > LEVEL_SPIKE_STICK_OUT * range) return TRENDS.LEVEL_SPIKE;
+        if (Math.min(...ends) - Math.min(...values) > LEVEL_SPIKE_STICK_OUT * range) return TRENDS.LEVEL_DIP;
       }
       return TRENDS.STABLE;
     }
@@ -834,8 +911,8 @@
       if (Math.sign(fitted) !== Math.sign(overall) || Math.abs(fitted) < FITTED_RISE_MIN_SHARE) return TRENDS.NONE;
     }
 
-    if (overall > 0) return TRENDS.UP_NOISY;
-    if (overall < 0) return TRENDS.DOWN_NOISY;
+    if (overall > 0) return negative === 0 ? TRENDS.UP_STEPPED : TRENDS.UP_NOISY;
+    if (overall < 0) return positive === 0 ? TRENDS.DOWN_STEPPED : TRENDS.DOWN_NOISY;
     return TRENDS.NONE;
   }
 
@@ -1036,6 +1113,8 @@
     return {
       kind: series.kind,
       name: series.name || null,
+      unlabelled: series.unlabelled === true,
+      overallPosition: allSeries.indexOf(series) + 1,
       position: index + 1,
       kindCount: sameKind.length,
       isAmongSeveral: sameKind.length > 1,
@@ -1089,8 +1168,9 @@
   function seriesColumnHeader(series, allSeries) {
     const { text, author } = modelCore();
     const identity = seriesIdentity(series, allSeries);
+    if (identity.unlabelled) return [text(`Unlabelled series ${identity.overallPosition}`)];
     if (identity.name) {
-      const sameName = allSeries.filter((one) => one.name === series.name);
+      const sameName = allSeries.filter((one) => seriesNameKey(one) === seriesNameKey(series));
       if (sameName.length > 1) return [author(identity.name), text(` (series ${sameName.indexOf(series) + 1})`)];
       return [author(identity.name)];
     }
@@ -1099,10 +1179,20 @@
     return [text(identity.isAmongSeveral ? `${base} ${identity.position}` : base)];
   }
 
-  // A label is blank when it holds only white space and Unicode format characters (zero-width space, joiner and the like).
-  const BLANK_LABEL = /^[\s\p{Cf}]*$/u;
+  // Characters that draw as nothing: white space, Unicode format characters (zero-width space, joiner and the like), the combining
+  // grapheme joiner, the Hangul fillers, the braille blank U+2800 and the variation selectors. One class serves every name and every
+  // label, so nothing is blank in one place and visible in another.
+  const INVISIBLE_CHARS = String.raw`\s\p{Cf}\u034F\u115F\u1160\u2800\u3164\uFE00-\uFE0F\uFFA0`;
+
+  // A label is blank when it holds only invisible characters.
+  const BLANK_LABEL = new RegExp(`^[${INVISIBLE_CHARS}]*$`, "u");
+  // A series name compared by what it sounds like: edge white space and format characters are dropped.
+  function seriesNameKey(series) {
+    return typeof series.name === "string" ? series.name.replace(LABEL_EDGES, "") : "";
+  }
+
   // White space and format characters at either end of a label do not change how it sounds or looks.
-  const LABEL_EDGES = /^[\s\p{Cf}]+|[\s\p{Cf}]+$/gu;
+  const LABEL_EDGES = new RegExp(`^[${INVISIBLE_CHARS}]+|[${INVISIBLE_CHARS}]+$`, "gu");
 
   /**
    * True when the label at this index appears more than once on the axis, so a
@@ -1163,9 +1253,14 @@
     const { text, author } = modelCore();
     const identity = seriesIdentity(series, allSeries);
 
+    if (identity.unlabelled) return [text(`unlabelled series ${identity.overallPosition}`)];
     if (identity.name) {
       // Two series with one name are told apart by their order.
-      const sameName = allSeries.filter((one) => one.name === series.name);
+      const sameName = allSeries.filter((one) => seriesNameKey(one) === seriesNameKey(series));
+      if (sameName.length > 1 && new Set(sameName.map((one) => one.kind)).size > 1) {
+        const ordinal = identity.isAmongSeveral ? `${ordinalWord(identity.position)} ` : "";
+        return [text(`the ${ordinal}"`), author(identity.name), text(`" ${series.kind} series`)];
+      }
       if (sameName.length > 1) {
         return [text(`the ${ordinalWord(sameName.indexOf(series) + 1)} "`), author(identity.name), text('" series')];
       }
@@ -1295,7 +1390,13 @@
     if (indices.length >= TIED_POSITION_COLLAPSE_AT) {
       // On a labelled axis the collapsed set is categories, not points.
       if (hasDeclaredCategories(chart)) {
-        return [text(`${countWord(indices.length)} of the ${axisNoun(chart).plural}`)];
+        const declared = declaredCategories(chart).length;
+        const inside = indices.filter((i) => i < declared).length;
+        const past = indices.length - inside;
+        const insideText = `${countWord(inside)} of the ${axisNoun(chart).plural}`;
+        if (past === 0) return [text(insideText)];
+        const pastText = `${countWord(past)} ${past === 1 ? "position" : "positions"} past the labels`;
+        return [text(inside === 0 ? pastText : `${insideText} and ${pastText}`)];
       }
       return [text(`${countWord(indices.length)} points`)];
     }
@@ -1611,13 +1712,12 @@
         ];
       }
 
-      // Means are compared to 12 significant figures, so that sums which differ
-      // only by floating-point noise count as equal.
-      const means = series.map((one) =>
-        Number(computeStatistics(one.values).mean.toPrecision(MEAN_COMPARE_DIGITS))
-      );
+      // Means count as equal when they differ by no more than a relative gap of 1e-14, so that sums which differ
+      // only by floating-point noise are equal and means that differ at the thirteenth figure are not.
+      const means = series.map((one) => computeStatistics(one.values).mean);
       const highestMean = Math.max(...means);
-      const leaders = series.filter((one, i) => means[i] === highestMean);
+      const sameMean = (a, b) => Math.abs(a - b) <= MEAN_COMPARE_REL_GAP * Math.max(Math.abs(a), Math.abs(b));
+      const leaders = series.filter((one, i) => sameMean(means[i], highestMean));
       // A mean that is not a number (outside the stated input) names the first series, as before.
       if (leaders.length === 0) leaders.push(series[0]);
       if (leaders.length === series.length) {
@@ -1657,7 +1757,7 @@
     if (isRangeAxis) return rangeSentence;
     if (!Number.isFinite(stats.mean) || stats.mean === 0) return rangeSentence;
 
-    const maxRatio = stats.max / stats.mean;
+    const maxRatio = highPointRatio(stats);
     const minRatio = stats.min / stats.mean;
 
     if (only.kind === SERIES_KINDS.LINE) {
@@ -1724,10 +1824,21 @@
       return [
         text(`The lowest value, ${formatAuthorValueForTier(tier, stats.min)} at `),
         ...pointReferencesRuns(chart, stats.minIndices, REFERENCE_STYLE.STANDALONE),
-        text(`, is ${Math.round((1 - minRatio) * 100)}% below the average.`),
+        text(`, is ${stats.min > 0 && Math.round((1 - minRatio) * 100) >= 100 ? "more than 99" : Math.round((1 - minRatio) * 100)}% below the average.`),
       ];
     }
     return rangeSentence;
+  }
+
+  /**
+   * The ratio of the highest value to the average, which the takeaway compares with HIGH_POINT_RATIO.
+   * @param {Object} stats - Statistics from computeStatistics
+   * @returns {number} The ratio
+   */
+  function highPointRatio(stats) {
+    const largest = Math.max(Math.abs(stats.max), Math.abs(stats.min));
+    if (stats.min < 0 && stats.mean < MIXED_SIGN_MEAN_MIN_SHARE * largest) return 0;
+    return stats.max / stats.mean;
   }
 
   /**
@@ -2294,9 +2405,9 @@
 
       if (stats.count >= STATISTICS_MIN_POINTS) {
         items.push(
-          item([text(`Standard deviation: ${formatDerivedValue(stats.standardDeviation)}.`)])
+          item([text(`Standard deviation: ${formatSpread(stats)}.`)])
         );
-        items.push(item([text(`Median value: ${formatDerivedValue(stats.median)}.`)]));
+        items.push(item([text(`Median value: ${formatMean(stats.median, stats.min, stats.max)}.`)]));
         items.push(item([text(buildDistributionSentence(stats))]));
       }
       return items;
@@ -2383,11 +2494,12 @@
       // The takeaway (the first bullet) already says a consistent trend, so it is not repeated.
       const takeawayStatesTrend =
         isOnlySeries &&
-        (trend === TRENDS.UP || trend === TRENDS.DOWN || trend === TRENDS.RISES || trend === TRENDS.FALLS) &&
         Number.isFinite(stats.mean) &&
-        stats.mean !== 0;
-      if (turn) items.push(item([...capitaliseRuns(label), ...turn, text(".")]));
-      else if (clause && !takeawayStatesTrend) items.push(item([...capitaliseRuns(label), text(` ${clause}.`)]));
+        stats.mean !== 0 &&
+        !isDegenerateSeries(stats) &&
+        (trend === TRENDS.UP || trend === TRENDS.DOWN || trend === TRENDS.RISES || trend === TRENDS.FALLS || !(highPointRatio(stats) > HIGH_POINT_RATIO));
+      if (turn && !takeawayStatesTrend) items.push(item([...capitaliseRuns(label), ...turn, text(".")]));
+      else if (clause && !turn && !takeawayStatesTrend) items.push(item([...capitaliseRuns(label), text(` ${clause}.`)]));
     }
 
     // This is the line-chart side of dropping the extremes on a flat series. The
@@ -2450,7 +2562,7 @@
       items.push(
         item([
           text(
-            `The data shows a cyclic pattern with ${countWord(shape.peaks)} peaks and ${countWord(shape.troughs)} troughs.`
+            `The data rises and falls repeatedly, with ${countWord(shape.peaks)} peaks and ${countWord(shape.troughs)} troughs.`
           ),
         ])
       );
@@ -2463,7 +2575,7 @@
       if (Math.abs(percentChange) > OVERALL_CHANGE_MIN_PERCENT) {
         // A start that is near zero, or on the other side of zero from the end, makes the percentage a function of the start.
         const scale = Math.max(...series.values.map((value) => Math.abs(value)));
-        if (first * last < 0 || Math.abs(first) < NEAR_ZERO_START_SHARE * scale) {
+        if (first < 0 || first * last < 0 || Math.abs(first) < NEAR_ZERO_START_SHARE * scale) {
           items.push(item([text(`Overall, the values go from ${formatAuthorValue(first)} at the start to ${formatAuthorValue(last)} at the end.`)]));
           return items;
         }
@@ -2578,6 +2690,25 @@
   }
 
   /**
+   * The chart with every blank title and series name taken out, so that no sentence quotes an empty name. A blank
+   * title or axis title reads as no title. A blank series name is marked, and is spoken as "unlabelled series N".
+   * @param {Object} chart - The adapter's chart
+   * @returns {Object} A copy with blank text removed
+   */
+  function withoutBlankText(chart) {
+    const clean = (value) => (typeof value === "string" && BLANK_LABEL.test(value) ? null : value);
+    return {
+      ...chart,
+      title: clean(chart.title),
+      xAxis: chart.xAxis ? { ...chart.xAxis, title: clean(chart.xAxis.title) } : chart.xAxis,
+      yAxis: chart.yAxis ? { ...chart.yAxis, title: clean(chart.yAxis.title) } : chart.yAxis,
+      series: (chart.series || []).map((one) =>
+        typeof one.name === "string" && BLANK_LABEL.test(one.name) ? { ...one, name: null, unlabelled: true } : one
+      ),
+    };
+  }
+
+  /**
    * The xychart's description as a model. The short sentence is runs: the
    * opening, a describer space, and the SHORT takeaway. The three headed
    * sections come in a fixed order: Chart Construction, Key Insights and Data
@@ -2589,8 +2720,9 @@
    *   `drawnSeriesName`
    * @returns {Object} A DescriptionModel (see model.js)
    */
-  function buildXychartModel(chart, options) {
+  function buildXychartModel(givenChart, options) {
     const { text, section, description } = modelCore();
+    const chart = withoutBlankText(givenChart);
 
     const shortRuns = [
       ...buildShortOpeningRuns(chart, options),
