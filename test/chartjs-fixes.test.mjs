@@ -96,3 +96,89 @@ test("a pie config drawn as a whole circle is still described", () => {
   assert.equal(lib.chartjs.describe(gaugeConfig({}, {})).supported, true);
   assert.equal(lib.chartjs.describe(gaugeConfig({}, { circumference: null })).supported, true);
 });
+
+// ---------------------------------------------------------------------------------------------------
+// A hole in the data is a missing value; a series with no values, a total that overflows, a title Chart.js
+// does not draw, a ring (a pie with `cutout`) and a title with a line break are not described as they stand.
+
+const simplePie = (extra = {}, data = [1, 2, 3], dataset = {}) => ({
+  type: "pie",
+  data: { labels: ["A", "B", "C"], datasets: [{ data, ...dataset }] },
+  ...extra,
+});
+const simpleBar = (data, labels = ["A", "B", "C"], extra = {}) => ({
+  type: "bar",
+  data: { labels, datasets: [{ label: "S", data }] },
+  ...extra,
+});
+const titled = (text, display) => ({ options: { plugins: { title: display === undefined ? { text } : { text, display } } } });
+
+test("a hole in the data array is refused as a missing value, as an explicit undefined is", () => {
+  const NULL_VALUES = { supported: false, reason: "null-values" };
+  const holeInMiddle = [1, , 3];
+  const holeAtEnd = [1, 2, 3];
+  delete holeAtEnd[2];
+  assert.deepEqual(lib.chartjs.describe(simplePie({}, holeInMiddle)), NULL_VALUES);
+  assert.deepEqual(lib.chartjs.describe(simplePie({}, holeAtEnd)), NULL_VALUES);
+  assert.deepEqual(lib.chartjs.describe(simpleBar(holeInMiddle)), NULL_VALUES);
+  assert.deepEqual(lib.chartjs.describe(simplePie({}, [1, undefined, 3])), NULL_VALUES);
+  assert.equal(lib.chartjs.describe(simplePie({}, [1, 2, 3])).supported, true);
+});
+
+test("a bar or line series with no values is refused, not described as undefined", () => {
+  const NO_DATA = { supported: false, reason: "no-data" };
+  assert.deepEqual(lib.chartjs.describe(simpleBar([], ["A", "B"])), NO_DATA);
+  assert.deepEqual(lib.chartjs.describe(simpleBar([], [])), NO_DATA);
+  assert.deepEqual(lib.chartjs.describe({ type: "line", data: { labels: ["A"], datasets: [{ label: "S", data: [] }] } }), NO_DATA);
+  const oneEmpty = { type: "bar", data: { labels: ["A", "B"], datasets: [{ label: "S", data: [1, 2] }, { label: "T", data: [] }] } };
+  assert.deepEqual(lib.chartjs.describe(oneEmpty), NO_DATA);
+  assert.equal(lib.chartjs.describe(simpleBar([1, 2], ["A", "B"])).supported, true);
+});
+
+test("a pie whose finite values sum past the largest number is refused", () => {
+  const NON_FINITE_TOTAL = { supported: false, reason: "non-finite-total" };
+  assert.deepEqual(lib.chartjs.describe({ ...simplePie({}, [1e308, 1e308]), data: { labels: ["A", "B"], datasets: [{ data: [1e308, 1e308] }] } }), NON_FINITE_TOTAL);
+  const large = { type: "pie", data: { labels: ["A", "B"], datasets: [{ data: [1e300, 1e300] }] } };
+  assert.equal(lib.chartjs.describe(large).supported, true);
+});
+
+test("a title that Chart.js does not draw is not described", () => {
+  const has = (config) => lib.chartjs.describe(config).short.includes("titled");
+  assert.equal(has(simplePie(titled("Votes by colour"))), false);
+  assert.equal(has(simplePie(titled("Votes by colour", false))), false);
+  assert.equal(has(simplePie(titled("Votes by colour", true))), true);
+  assert.equal(has(simpleBar([1, 2, 3], ["A", "B", "C"], titled("Sales"))), false);
+  assert.equal(has(simpleBar([1, 2, 3], ["A", "B", "C"], titled("Sales", true))), true);
+});
+
+test("a pie with a cutout is a ring and is refused as a doughnut is", () => {
+  const DOUGHNUT = { supported: false, reason: "unsupported-type-doughnut" };
+  assert.deepEqual(lib.chartjs.describe(simplePie({ options: { cutout: "50%" } })), DOUGHNUT);
+  assert.deepEqual(lib.chartjs.describe(simplePie({}, [1, 2, 3], { cutout: 80 })), DOUGHNUT);
+  assert.deepEqual(lib.chartjs.describe(simplePie({ options: { cutout: 5 } })), DOUGHNUT);
+  // A cutout of zero, in any spelling, or none, is a whole pie; the dataset's own beats the chart's.
+  for (const cutout of [0, "0", "0%", undefined, null]) {
+    assert.equal(lib.chartjs.describe(simplePie({ options: { cutout } })).supported, true, String(cutout));
+  }
+  assert.equal(lib.chartjs.describe(simplePie({ options: { cutout: "50%" } }, [1, 2, 3], { cutout: 0 })).supported, true);
+});
+
+test("a title written with a line break is refused as an array title is", () => {
+  const MULTI_LINE = { supported: false, reason: "multi-line-title" };
+  assert.deepEqual(lib.chartjs.describe(simplePie(titled("Line one\nLine two", true))), MULTI_LINE);
+  assert.deepEqual(lib.chartjs.describe(simplePie(titled("Line one\r\nLine two", true))), MULTI_LINE);
+  assert.deepEqual(lib.chartjs.describe(simpleBar([1, 2, 3], ["A", "B", "C"], titled("Line one\nLine two", true))), MULTI_LINE);
+  assert.deepEqual(lib.chartjs.describe(simplePie(titled(["Line one", "Line two"], true))), MULTI_LINE);
+  assert.equal(lib.chartjs.describe(simplePie(titled("One line", true))).supported, true);
+});
+
+test("a bar or line whose values sum past the largest number is refused, not described with an infinite average", () => {
+  const NON_FINITE_TOTAL = { supported: false, reason: "non-finite-total" };
+  for (const type of ["bar", "line"]) {
+    const config = { type, data: { labels: ["A", "B"], datasets: [{ label: "S", data: [1e308, 1e308] }] } };
+    assert.deepEqual(lib.chartjs.describe(config), NON_FINITE_TOTAL, type);
+  }
+  const large = { type: "bar", data: { labels: ["A", "B"], datasets: [{ label: "S", data: [1e307, 1e307] }] } };
+  assert.equal(lib.chartjs.describe(large).supported, true, "a large total that still fits is described");
+  assert.ok(!JSON.stringify(lib.chartjs.describe(large)).includes("Infinity"));
+});

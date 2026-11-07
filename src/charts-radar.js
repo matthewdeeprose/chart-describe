@@ -226,17 +226,29 @@
   }
 
   /**
-   * A number as the words give it: the delivered number, verbatim.
+   * A number as the words give it: the delivered number, in digits.
    *
-   * `String()` of the delivered number and nothing else: 2.5 stays 2.5, and
-   * nothing is rounded or re-formatted. The only rounded figure in this file
-   * is the average, and it is rounded by `roundedMean` before it gets here.
+   * `String()` of the delivered number, except that exponent form is written
+   * out in digits, because a screen reader says "2e-7" as letters and
+   * symbols. 2.5 stays 2.5, and nothing is rounded or re-formatted. The same
+   * digit form as the pie's `formatValue`, so the two families read a number
+   * alike. The only rounded figure in this file is the average, and it is
+   * rounded by `roundedMean` before it gets here.
    *
    * @param {number} value - A delivered number
    * @returns {string} Its digits
    */
   function numberText(value) {
-    return String(value);
+    const written = String(value);
+    // JavaScript switches to exponent form at 1e21 and above, and at 1e-7 and below.
+    const parts = /^(-?)(\d+)(?:\.(\d+))?e([+-]\d+)$/.exec(written);
+    if (!parts) return written;
+    const [, sign, whole, fraction = "", exponent] = parts;
+    const digits = whole + fraction;
+    const point = whole.length + Number(exponent);
+    if (point <= 0) return `${sign}0.${"0".repeat(-point)}${digits}`;
+    if (point >= digits.length) return sign + digits + "0".repeat(point - digits.length);
+    return `${sign}${digits.slice(0, point)}.${digits.slice(point)}`;
   }
 
   /**
@@ -253,11 +265,18 @@
     return [text('"'), author(String(label)), text('"')];
   }
 
-  /** A label with nothing visible in it: only white space and Unicode format characters (such as a zero-width space). */
-  const BLANK_LABEL = /^[\s\p{Cf}]*$/u;
+  // The characters that draw as nothing: white space, Unicode format characters (such as a
+  // zero-width space), and the seven that are neither yet still draw as nothing: the combining
+  // grapheme joiner U+034F, the Hangul fillers U+115F, U+1160, U+3164 and U+FFA0, the Braille
+  // blank U+2800, and the variation selectors U+FE00 to U+FE0F. ONE class serves every name and
+  // every title, so no name is blank in one place and visible in another.
+  const INVISIBLE_CHARS = String.raw`\s\p{Cf}\u034F\u115F\u1160\u2800\u3164\uFE00-\uFE0F\uFFA0`;
+
+  /** A label or title with nothing visible in it. */
+  const BLANK_LABEL = new RegExp(`^[${INVISIBLE_CHARS}]*$`, "u");
 
   /**
-   * Is a label empty, or made only of white space and format characters?
+   * Is a label empty, or made only of characters that draw as nothing?
    *
    * Mermaid keeps `""` rather than falling back to the id (`label ?? name`),
    * so such a label reaches the canvas as an empty string and is drawn as
@@ -269,6 +288,19 @@
    */
   function isUnlabelled(label) {
     return BLANK_LABEL.test(label);
+  }
+
+  /**
+   * Did the author give a title that can be seen? A title of characters that
+   * draw as nothing reads as no title, so the sentence never quotes an empty
+   * pair of marks and the table caption never ends on nothing. A title of 0
+   * counts.
+   *
+   * @param {*} title - facts.title
+   * @returns {boolean} True when there is a visible title
+   */
+  function hasTitle(title) {
+    return title !== undefined && title !== null && !BLANK_LABEL.test(String(title));
   }
 
   /**
@@ -306,8 +338,8 @@
       : [author(String(label))];
   }
 
-  /** White space and format characters at either end of a label. */
-  const LABEL_EDGES = /^[\s\p{Cf}]+|[\s\p{Cf}]+$/gu;
+  /** Characters that draw as nothing, at either end of a label. */
+  const LABEL_EDGES = new RegExp(`^[${INVISIBLE_CHARS}]+|[${INVISIBLE_CHARS}]+$`, "gu");
 
   /**
    * The key two labels are compared by. White space and format characters at
@@ -362,9 +394,42 @@
     return isRepeatedAxisLabel(axes, index) ? [...name, text(axisPositionText(index))] : name;
   }
 
-  /** A series in prose; its position is its place among EVERY series. */
+  /**
+   * True when this series shares its label with another series, so a reader
+   * given the label alone could not tell which series is meant. Same rule as
+   * the axes: the repeat key, the author's own text, an unlabelled series
+   * never counts, and EVERY series counts, drawn or not.
+   *
+   * @param {Object} facts - The radar facts
+   * @param {Object} curve - A delivered series
+   * @returns {boolean} Whether the label is repeated
+   */
+  function isRepeatedSeriesLabel(facts, curve) {
+    if (isUnlabelled(curve.label)) return false;
+    const key = repeatKey(curve.label);
+    return facts.curves.filter((one) => !isUnlabelled(one.label) && repeatKey(one.label) === key).length > 1;
+  }
+
+  /** The position that tells repeated series apart: " (series 2)". */
+  function seriesPositionText(facts, curve) {
+    return ` (series ${facts.curves.indexOf(curve) + 1})`;
+  }
+
+  /**
+   * A series in prose; its position is its place among EVERY series. A
+   * repeated label takes its position on EVERY series that shares it.
+   */
   function seriesName(facts, curve) {
-    return proseName(curve.label, UNLABELLED_SERIES, facts.curves.indexOf(curve) + 1);
+    const { text } = modelCore();
+    const name = proseName(curve.label, UNLABELLED_SERIES, facts.curves.indexOf(curve) + 1);
+    return isRepeatedSeriesLabel(facts, curve) ? [...name, text(seriesPositionText(facts, curve))] : name;
+  }
+
+  /** A series as a TABLE HEADER names it; a repeated label takes its position, as in the prose. */
+  function seriesHeaderCell(facts, curve) {
+    const { text } = modelCore();
+    const cell = cellName(curve.label, UNLABELLED_SERIES, facts.curves.indexOf(curve) + 1);
+    return isRepeatedSeriesLabel(facts, curve) ? [...cell, text(seriesPositionText(facts, curve))] : cell;
   }
 
   /**
@@ -422,10 +487,9 @@
    */
   function buildShortRuns(facts) {
     const { text, author } = modelCore();
-    const titled =
-      facts.title === null
-        ? []
-        : [text(' titled "'), author(String(facts.title)), text('"')];
+    const titled = !hasTitle(facts.title)
+      ? []
+      : [text(' titled "'), author(String(facts.title)), text('"')];
     return [
       text("A radar chart"),
       ...titled,
@@ -444,7 +508,7 @@
    */
   function buildOpeningSentence(facts) {
     const { text } = modelCore();
-    const titled = facts.title === null ? [] : [text(" titled "), ...quotedLabel(facts.title)];
+    const titled = !hasTitle(facts.title) ? [] : [text(" titled "), ...quotedLabel(facts.title)];
     return [
       text("This radar chart"),
       ...titled,
@@ -607,7 +671,8 @@
   function buildGridSentence(facts) {
     const options = facts.options;
     const shape = options.graticule === "polygon" ? "polygonal" : "circular";
-    const ringCount = Math.ceil(options.ticks);
+    // A negative ticks value draws no ring (the loop never runs), so it reads "no rings".
+    const ringCount = Math.max(0, Math.ceil(options.ticks));
     const rings =
       ringCount === 0 ? "no rings" : countPhrase(ringCount, `${shape} ring`, `${shape} rings`);
     const legend = facts.legend ? "a legend names the series" : "there is no legend";
@@ -655,12 +720,23 @@
     const lastPlaces = Math.max(...values.map(decimalPlaces));
 
     // Whole number first; then one decimal place, two, and so on, until the
-    // result lies inside the series' own values (inclusive).
+    // result lies inside the series' own values (inclusive). A result that
+    // sits ON the highest or lowest value, when the mean is not that value,
+    // is passed over for one more decimal place (at most one beyond the
+    // series' own), so the figure does not read as an extreme. A series whose
+    // values are all equal has its mean on both extremes, so its first result
+    // stands and the extra place is never tried.
     let rounded = 0;
-    for (let places = 0; places <= lastPlaces; places += 1) {
+    let firstInside = null;
+    for (let places = 0; places <= lastPlaces + 1; places += 1) {
       rounded = roundHalfAwayFromZero(mean, places);
-      if (rounded >= lowest && rounded <= highest) return rounded;
+      if (rounded < lowest || rounded > highest) continue;
+      if (firstInside === null) firstInside = rounded;
+      const onExtreme = lowest !== highest && (rounded === lowest || rounded === highest);
+      const exact = Math.abs(rounded - mean) <= HALF_TOLERANCE * Math.max(1, Math.abs(mean));
+      if (!onExtreme || exact) return rounded;
     }
+    if (firstInside !== null) return firstInside;
 
     logWarn("The average lies outside the series at its own precision", {
       mean,
@@ -791,7 +867,7 @@
       // not for a mismatch; every other undrawn series is a count mismatch.
       const reason =
         curve.values.length === facts.N
-          ? "only one axis"
+          ? facts.N === 0 ? "no axes" : "only one axis"
           : `${valuesPhrase(curve.values.length)} for ${axesPhrase(facts.N)}`;
       return item(
         [
@@ -959,7 +1035,7 @@
   function buildDataTable(facts) {
     const { text, author, table } = modelCore();
     const caption =
-      facts.title === null
+      !hasTitle(facts.title)
         ? [text("Data table for this radar chart")]
         : [text("Data table for: "), author(String(facts.title))];
 
@@ -967,9 +1043,7 @@
       caption,
       columns: [
         [text("Axis")],
-        ...facts.tabled.map((curve) =>
-          cellName(curve.label, UNLABELLED_SERIES, facts.curves.indexOf(curve) + 1)
-        ),
+        ...facts.tabled.map((curve) => seriesHeaderCell(facts, curve)),
       ],
       rows: facts.axes.map((axis, index) => ({
         header: axisHeaderCell(facts.axes, index),
