@@ -139,11 +139,19 @@
   const LARGE_TOTAL_DIGITS = 15;
   // A share that prints as 0.0% but is above zero reads as this instead.
   const BELOW_ONE_TENTH = "less than 0.1%";
+  // A share below the whole that prints as 100.0% reads as this instead.
+  const ABOVE_99_9 = "more than 99.9%";
+
+  // One emptiness test for every name AND every title (shared across the three files): white space,
+  // Unicode format characters, and the invisible characters that are neither (combining grapheme joiner,
+  // Hangul fillers, Braille blank, variation selectors).
+  const BLANK_TEXT = /^[\s\p{Cf}͏ᅟᅠ⠀ㅤ︀-️ﾠ]*$/u;
+  const BLANK_EDGES = /^[\s\p{Cf}͏ᅟᅠ⠀ㅤ︀-️ﾠ]+|[\s\p{Cf}͏ᅟᅠ⠀ㅤ︀-️ﾠ]+$/gu;
 
   /** The noun for a count: "category" for one, "categories" otherwise. */
   /** True when the author gave a title: not undefined, null, empty or only spaces. A title of 0 counts. */
   function hasTitle(title) {
-    return title !== undefined && title !== null && String(title).trim() !== "";
+    return title !== undefined && title !== null && !BLANK_TEXT.test(String(title));
   }
 
   function categoryNoun(count) {
@@ -155,16 +163,30 @@
    * a whole number below 2^53, which is exact already. A total with twelve or
    * more whole digits keeps fifteen, so its fraction survives.
    */
-  function cleanTotal(total) {
-    if (Number.isInteger(total) && Math.abs(total) < Number.MAX_SAFE_INTEGER) {
+  function cleanTotal(total, places = 0) {
+    if (Number.isInteger(total) && Math.abs(total) <= Number.MAX_SAFE_INTEGER) {
       return total;
     }
     const wholeDigits = String(Math.trunc(Math.abs(total))).length;
+    // The finest decimal place any value carries is exact in the sum while the whole part and those places
+    // fit in fifteen digits, so the total is written to that place and no noise digit survives.
+    if (wholeDigits + places <= LARGE_TOTAL_DIGITS) {
+      return Number(total.toFixed(places));
+    }
     const digits =
       wholeDigits >= LARGE_TOTAL_WHOLE_DIGITS
         ? LARGE_TOTAL_DIGITS
         : SIGNIFICANT_DIGITS;
     return Number(total.toPrecision(digits));
+  }
+
+  /** The most decimal places any segment value is written with. */
+  function finestDecimalPlaces(segments) {
+    return segments.reduce((finest, segment) => {
+      const text = formatValue(segment.value);
+      const point = text.indexOf(".");
+      return point < 0 ? finest : Math.max(finest, text.length - point - 1);
+    }, 0);
   }
 
   /** True when any segment is below zero, so its share of a pie has no meaning. */
@@ -184,7 +206,8 @@
   function formatPercentage(value, total) {
     const share = (value / total) * 100;
     const text = share.toFixed(1);
-    return value > 0 && text === "0.0" ? BELOW_ONE_TENTH : text + "%";
+    if (value > 0 && text === "0.0") return BELOW_ONE_TENTH;
+    return value < total && text === "100.0" ? ABOVE_99_9 : text + "%";
   }
 
   /**
@@ -217,8 +240,12 @@
   function readTies(segments) {
     const first = segments[0].value;
     const last = segments[segments.length - 1].value;
-    const largest = segments.filter((segment) => segment.value === first);
-    const smallest = segments.filter((segment) => segment.value === last);
+    const tiedWith = (anchor) => (segment) =>
+      segment.value === anchor ||
+      Math.abs(segment.value - anchor) <=
+        FRACTION_TOLERANCE * Math.max(Math.abs(segment.value), Math.abs(anchor));
+    const largest = segments.filter(tiedWith(first));
+    const smallest = segments.filter(tiedWith(last));
     return {
       largest,
       smallest,
@@ -252,9 +279,9 @@
 
   // A name is blank when it holds only white space and Unicode format characters
   // (zero-width space, zero-width joiner, word joiner, soft hyphen).
-  const BLANK_NAME = /^[\s\p{Cf}]*$/u;
+  const BLANK_NAME = BLANK_TEXT;
   // White space and format characters at either end of a name do not change how it sounds or looks.
-  const NAME_EDGES = /^[\s\p{Cf}]+|[\s\p{Cf}]+$/gu;
+  const NAME_EDGES = BLANK_EDGES;
 
   // What buildPieModel learned about each segment BEFORE it sorted them:
   // declaration position (over ALL segments), whether the name is blank,
@@ -333,6 +360,26 @@
     );
   }
 
+  const PIE_TOTAL_OVERFLOW = "The pie values add up to more than a number can hold.";
+
+  // A tie of more names than the cap is cut to the first few and a count, so the short description does
+  // not grow with the size of a tie. The Largest segments line in Key Insights still names them all.
+  const TIE_NAMES_CAP = 5;
+  const TIE_NAMES_KEPT = 5;
+
+  function tiedNames(group) {
+    const { text } = modelCore();
+    const label = (segment, index) => [segmentLabel(segment, { opening: index === 0 })];
+    if (group.length <= TIE_NAMES_CAP) return joinRuns(group.map(label));
+    const runs = [];
+    group.slice(0, TIE_NAMES_KEPT).forEach((segment, index) => {
+      if (index > 0) runs.push(text(", "));
+      runs.push(...label(segment, index));
+    });
+    runs.push(text(` and ${countWord(group.length - TIE_NAMES_KEPT)} more`));
+    return runs;
+  }
+
   const ZERO_SENTENCE =
     "Every value is zero, so no segment is larger than another.";
 
@@ -348,6 +395,9 @@
   function largestSentence(segments, total) {
     const { text, term } = modelCore();
     if (hasNegativeValue(segments)) return [text(NEGATIVE_SENTENCE)];
+    if (total === 0 && segments.length === 1) {
+      return [segmentLabel(segments[0], { opening: true }), text(" is the only segment, and its value is zero.")];
+    }
     if (total === 0) return [text(ZERO_SENTENCE)];
 
     const ties = readTies(segments);
@@ -376,11 +426,7 @@
 
     if (ties.largest.length > 1) {
       return [
-        ...joinRuns(
-          ties.largest.map((segment, index) => [
-            segmentLabel(segment, { opening: index === 0 }),
-          ])
-        ),
+        ...tiedNames(ties.largest),
         text(" are the joint largest segments, at "),
         percentage,
         text(" each."),
@@ -425,6 +471,12 @@
 
     const total = segments.reduce((sum, segment) => sum + segment.value, 0);
 
+    // Finite values whose float sum overflows would give every segment a share of 0%. Refuse, as a thrown
+    // error with a stable message, rather than describe a chart wrongly. (NaN and Infinity inputs are not this case.)
+    if (!Number.isFinite(total) && segments.every((segment) => Number.isFinite(segment.value))) {
+      throw new RangeError(PIE_TOTAL_OVERFLOW);
+    }
+
     logDebug("Total value across all segments: " + total);
 
     const titleRuns = hasTitle(title)
@@ -445,7 +497,7 @@
       paragraph([
         text("This pie chart"),
         ...titleRuns,
-        text(" shows the distribution of categories."),
+        text(segments.length ? " shows the distribution of categories." : " has no categories."),
       ]),
     ];
     if (segments.length > 0) {
@@ -461,14 +513,6 @@
           segments.map((segment) => item([segmentLabel(segment, { opening: true })])),
           { role: PIE_ROLES.CATEGORIES }
         )
-      );
-    } else {
-      constructionBlocks.push(
-        paragraph([
-          text(
-            "The chart is divided into segments in a circular layout, with each segment's size representing its proportion of the whole."
-          ),
-        ])
       );
     }
 
@@ -487,7 +531,7 @@
       item(
         [
           text("Total: "),
-          term("value", [text(formatValue(cleanTotal(total)))]),
+          term("value", [text(formatValue(cleanTotal(total, finestDecimalPlaces(segments))))]),
         ],
         { role: PIE_ROLES.TOTAL }
       )
@@ -538,10 +582,15 @@
         role: PIE_ROLES.INSIGHTS,
         heading: [text("Key Insights")],
       }),
-      section([list(dataItems, { role: PIE_ROLES.DATA })], {
-        role: PIE_ROLES.DATA,
-        heading: [text("Complete Data Points")],
-      }),
+      // An empty pie has no data points to list.
+      ...(segments.length
+        ? [
+            section([list(dataItems, { role: PIE_ROLES.DATA })], {
+              role: PIE_ROLES.DATA,
+              heading: [text("Complete Data Points")],
+            }),
+          ]
+        : []),
     ];
 
     // The pattern section needs enough segments to identify patterns, and a
@@ -615,6 +664,7 @@
 
   const api = {
     buildPieModel,
+    PIE_TOTAL_OVERFLOW,
   };
 
   root.ChartDescribePie = api;

@@ -398,3 +398,131 @@ test("a blank name that is the largest segment opens its sentence in capitals", 
   const { short } = describe("Two blank", [["", 60], ["", 40]]);
   assert.ok(short.endsWith(sentence("Unlabelled segment 1", "60.0", "over half")));
 });
+
+// ---- Rules 12 to 20: total digits, overflow, empty pie, noise ties, invisible titles and names,
+// ---- one zero segment, long ties, and a share that rounds up to the whole ----
+
+const totalLine = (lines) => insights(lines).find((line) => line.startsWith("• Total: "));
+
+// Rule 12: the total keeps every digit the values carry while the whole part and the decimals fit in fifteen digits
+
+test("12a: a total with 11 whole digits keeps its two decimals", () => {
+  const { lines } = describe("", [["A", 22222222222.5], ["B", 0.25]]);
+  assert.equal(totalLine(lines), "• Total: 22222222222.75");
+});
+
+test("12b: a total with 10 whole digits keeps its three decimals", () => {
+  const { lines } = describe("", [["A", 1234567890.125], ["B", 0.5]]);
+  assert.equal(totalLine(lines), "• Total: 1234567890.625");
+});
+
+test("12c: a total at the largest safe whole number is not rounded down", () => {
+  const { lines } = describe("", [["A", Number.MAX_SAFE_INTEGER], ["B", 0]]);
+  assert.equal(totalLine(lines), "• Total: 9007199254740991");
+});
+
+test("12d: a total with 12 whole digits still reads as before, and float noise is still removed", () => {
+  assert.equal(totalLine(describe("", [["A", 123456789012], ["B", 0.35]]).lines), "• Total: 123456789012.35");
+  assert.equal(totalLine(describe("", [["A", 0.1], ["B", 0.2]]).lines), "• Total: 0.3");
+  assert.equal(totalLine(describe("", [["A", 0.30000000000000004], ["B", 0.3]]).lines), "• Total: 0.6");
+});
+
+// Rule 13: values whose sum overflows are refused
+
+test("13: finite values that add up to Infinity are refused, not described", () => {
+  assert.throws(
+    () => describe("", [["A", 1e308], ["B", 1e308]]),
+    { name: "RangeError", message: lib.pie.PIE_TOTAL_OVERFLOW },
+  );
+  // A value that is not finite is a different input and is not this error.
+  assert.doesNotThrow(() => describe("", [["A", NaN], ["B", 1]]));
+});
+
+// Rule 14: an empty pie says it has no categories and does not describe segments
+
+test("14: an empty pie has no segment sentence and no empty data heading", () => {
+  const { lines, detailed } = describe("Nothing", []);
+  assert.equal(lines[lines.indexOf("Chart Construction") + 2], 'This pie chart titled "Nothing" has no categories.');
+  assert.ok(!detailed.includes("divided into segments"));
+  assert.ok(!detailed.includes("shows the distribution of categories"));
+  assert.ok(!lines.includes("Complete Data Points"));
+  assert.deepEqual(lines.slice(lines.indexOf("Key Insights") + 2), ["• Total: 0"]);
+});
+
+// Rule 15: values that differ by float noise are tied
+
+test("15a: two values that differ by float noise are tied, not a largest and a smallest", () => {
+  const { short, detailed } = describe("", [["A", 0.1 + 0.2], ["B", 0.3]]);
+  assert.ok(short.endsWith("Both segments are equal, at 50.0% each."));
+  assert.ok(!detailed.includes("Largest segment:"));
+});
+
+test("15b: values that differ for real are not tied", () => {
+  const { detailed: apart } = describe("", [["A", 1000000], ["B", 1], ["C", 1.000001]]);
+  assert.ok(apart.includes("• Smallest segment: B (1, less than 0.1%)"));
+  const near = describe("", [["A", 30], ["B", 20], ["C", 20.000000001]]);
+  assert.ok(near.detailed.includes("• Smallest segment: B (20, 28.6%)"));
+});
+
+// Rule 16: a title or a name of only invisible characters reads as none
+
+const INVISIBLE = ["​", "​‍", "ㅤ", "⠀", "͏", "️", "ᅟᅠ", "ﾠ", " "];
+
+test("16a: a title of only invisible characters is left out", () => {
+  for (const title of INVISIBLE) {
+    const { short, detailed } = describe(title, [["A", 1], ["B", 2]]);
+    assert.ok(short.startsWith("A pie chart showing"), JSON.stringify(title));
+    assert.ok(detailed.includes("This pie chart shows the distribution of categories."), JSON.stringify(title));
+  }
+  assert.ok(describe(0, [["A", 1], ["B", 2]]).short.startsWith('A pie chart titled "0" showing'));
+  assert.ok(describe("❤️", [["A", 1]]).short.startsWith('A pie chart titled "❤️" showing'));
+});
+
+test("16b: a name of only invisible characters reads unlabelled", () => {
+  for (const name of INVISIBLE) {
+    const { lines } = describe("", [["Real", 50], [name, 30], ["Other", 20]]);
+    assert.deepEqual(categoryList(lines), ["• Real", "• Unlabelled segment 2", "• Other"], JSON.stringify(name));
+  }
+});
+
+test("16c: the repeat key trims the same invisible characters at the edges", () => {
+  const { lines } = describe("", [["Northㅤ", 30], ["North", 20], ["South", 10]]);
+  assert.deepEqual(categoryList(lines), ["• Northㅤ (segment 1)", "• North (segment 2)", "• South"]);
+});
+
+// Rule 17: one segment of value zero is not "larger than another"
+
+test("17: a pie of one zero segment says so", () => {
+  const { short, lines } = describe("", [["Only", 0]]);
+  assert.ok(short.endsWith("Only is the only segment, and its value is zero."));
+  assert.deepEqual(insights(lines), ["• Only is the only segment, and its value is zero.", "• Total: 0"]);
+  assert.ok(describe("", [["A", 0], ["B", 0]]).short.endsWith("Every value is zero, so no segment is larger than another."));
+});
+
+// Rule 18: a long tie in the short description is cut to a count
+
+test("18: a tie of more than five names is cut to five and a count; Key Insights still names them all", () => {
+  const seven = Array.from({ length: 7 }, (_, i) => [`T${i + 1}`, 5]).concat([["Z", 1]]);
+  const { short, detailed } = describe("", seven);
+  assert.ok(short.endsWith("T1, T2, T3, T4, T5 and two more are the joint largest segments, at 13.9% each."), short);
+  assert.ok(detailed.includes("• Largest segments: T1, T2, T3, T4, T5, T6, and T7 (5 each, 13.9% each)"));
+  const six = Array.from({ length: 6 }, (_, i) => [`T${i + 1}`, 5]).concat([["Z", 1]]);
+  assert.ok(describe("", six).short.endsWith("T1, T2, T3, T4, T5 and one more are the joint largest segments, at 16.1% each."));
+  const fifteen = Array.from({ length: 15 }, (_, i) => [`T${i + 1}`, 5]).concat([["Z", 1]]);
+  assert.ok(describe("", fifteen).short.includes("T1, T2, T3, T4, T5 and 10 more are the joint largest segments, "), describe("", fifteen).short);
+  const five = Array.from({ length: 5 }, (_, i) => [`T${i + 1}`, 5]).concat([["Z", 1]]);
+  assert.ok(describe("", five).short.endsWith("T1, T2, T3, T4, and T5 are the joint largest segments, at 19.2% each."));
+  const many = Array.from({ length: 1000 }, (_, i) => [`L${i + 1}`, i % 9 === 8 ? 5 : 1]);
+  assert.ok(describe("", many).short.length < 200);
+});
+
+// Rule 19: a share below the whole never prints as 100.0%
+
+test("19: a share that rounds up to 100.0% reads more than 99.9%", () => {
+  const { short, detailed } = describe("", [["A", 9999], ["B", 1]]);
+  assert.ok(short.endsWith("A is the largest segment at more than 99.9%, representing over half of the total."));
+  assert.ok(detailed.includes("• A: 9999 (more than 99.9%)"));
+  assert.ok(detailed.includes("• B: 1 (less than 0.1%)"));
+  // The whole pie is still 100.0%.
+  assert.ok(describe("", [["A", 5], ["B", 0]]).detailed.includes("• A: 5 (100.0%)"));
+});
