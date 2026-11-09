@@ -526,3 +526,81 @@ test("19: a share that rounds up to 100.0% reads more than 99.9%", () => {
   // The whole pie is still 100.0%.
   assert.ok(describe("", [["A", 5], ["B", 0]]).detailed.includes("• A: 5 (100.0%)"));
 });
+
+// Rule 20: a finite sum near the largest number is never written as Infinity
+
+test("20: two values that add up to the largest number print that number, not Infinity", () => {
+  const half = Number.MAX_VALUE / 2;
+  const { short, detailed } = describe("", [["A", half], ["B", half]]);
+  assert.ok(short.endsWith("Both segments are equal, at 50.0% each."), short);
+  assert.ok(detailed.includes("• Total: 17976931348623157" + "0".repeat(292) + "\n"), "total is the largest number written out");
+  assert.ok(!detailed.includes("Infinity"));
+  // Control: a sum well below the largest number still rounds to fifteen digits.
+  assert.ok(describe("", [["A", 8e307], ["B", 9e307]]).detailed.includes("• Total: 17" + "0".repeat(307) + "\n"));
+});
+
+// Rule 21: a whole-number total below 1e21 prints in full
+
+test("21: a whole-number total of sixteen to twenty digits keeps every digit", () => {
+  const total = (pairs) => describe("", pairs).lines.find((line) => line.startsWith("• Total: "));
+  assert.equal(total([["A", 9007199254740991], ["B", 1]]), "• Total: 9007199254740992");
+  assert.equal(total([["A", 9007199254740992], ["B", 9007199254740992]]), "• Total: 18014398509481984");
+  assert.equal(total([["A", 9007199254740991], ["B", 2]]), "• Total: 9007199254740992", "the sum is the nearest double: the exact sum is not a double");
+  // Controls: the case an earlier rule repaired, a total below 2^53, and a total from 1e21 up (exponent form) are unchanged.
+  assert.equal(total([["A", 9007199254740990], ["B", 1]]), "• Total: 9007199254740991");
+  assert.equal(total([["A", 1e20], ["B", 1e20]]), "• Total: 200000000000000000000");
+  assert.equal(total([["A", 1e21], ["B", 1e21]]), "• Total: 2000000000000000000000");
+});
+
+// Rule 22: every Default_Ignorable_Code_Point except U+180F reads as no name and no title; controls do not
+
+const INVISIBLE_MORE = ["\u180B", "\u180C", "\u180D", "\u17B4", "\u17B5", "\u2065", "\u{E0100}", "\u{E01EF}", "\u180B\u17B4"];
+
+test("22a: a title or a name of only these characters reads as none", () => {
+  for (const blank of INVISIBLE_MORE) {
+    const shown = JSON.stringify(blank);
+    assert.ok(describe(blank, [["A", 1], ["B", 2]]).short.startsWith("A pie chart showing"), shown);
+    const { lines } = describe("", [["Real", 50], [blank, 30], ["Other", 20]]);
+    assert.deepEqual(categoryList(lines), ["• Real", "• Unlabelled segment 2", "• Other"], shown);
+  }
+});
+
+test("22b: the repeat key trims these characters at the edges", () => {
+  const { lines } = describe("", [["North᠋", 30], ["North", 20], ["South", 10]]);
+  assert.deepEqual(categoryList(lines), ["• North᠋ (segment 1)", "• North (segment 2)", "• South"]);
+  // A character that draws as something is still a name.
+  assert.ok(describe("©", [["A", 1]]).short.startsWith('A pie chart titled "©" showing'));
+});
+
+test("22c: the C0 and C1 controls and U+180F draw in Chromium, so they stay a name and a title", () => {
+  for (const drawn of ["\u0000", "\u0001", "\u007F", "\u0085", "\u180F"]) {
+    const shown = JSON.stringify(drawn);
+    assert.ok(describe(drawn, [["A", 1], ["B", 2]]).short.startsWith("A pie chart titled"), shown);
+    const { lines } = describe("", [["Real", 50], [drawn, 30], ["Other", 20]]);
+    assert.ok(!categoryList(lines).includes("• Unlabelled segment 2"), shown);
+  }
+});
+
+// Rule 23: a tie of values that differ says so, and no segment is both largest and smallest
+
+test("23a: values that differ read about equal, and Key Insights lists each value", () => {
+  const two = describe("", [["A", 1000000000001], ["B", 1000000000000]]);
+  assert.ok(two.short.endsWith("Both segments are about equal, at 50.0% each."), two.short);
+  const three = describe("", [["A", 1000000000001], ["B", 1000000000000], ["C", 1]]);
+  assert.ok(three.detailed.includes("• Largest segments: A and B (1000000000001 and 1000000000000, 50.0% each)"));
+  const four = describe("", [["A", 1000000000001], ["B", 1000000000000], ["C", 1000000000000], ["D", 5]]);
+  assert.ok(four.detailed.includes("• Largest segments: A, B, and C (1000000000001, 1000000000000, and 1000000000000, 33.3% each)"));
+  assert.ok(describe("", [["A", 4000000000004], ["B", 4000000000003], ["C", 4000000000004], ["D", 4000000000004]]).short.endsWith("All four segments are about equal, at 25.0% each."));
+});
+
+test("23b: values that are one value keep equal and each", () => {
+  // The float-noise tie of rule 15, and exact ties, are unchanged.
+  assert.ok(describe("", [["A", 0.1 + 0.2], ["B", 0.3]]).short.endsWith("Both segments are equal, at 50.0% each."));
+  assert.ok(describe("", [["A", 40], ["B", 40], ["C", 20]]).detailed.includes("• Largest segments: A and B (40 each, 40.0% each)"));
+});
+
+test("23c: a middle value within the tolerance of both ends is named once", () => {
+  const { detailed } = describe("", [["A", 1.0000000000015], ["B", 1.00000000000075], ["C", 1]]);
+  assert.ok(detailed.includes("• Largest segments: A and B (1.0000000000015 and 1.00000000000075, 33.3% each)"), detailed);
+  assert.ok(detailed.includes("• Smallest segment: C (1, 33.3%)"), detailed);
+});

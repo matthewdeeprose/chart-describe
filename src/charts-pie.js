@@ -143,10 +143,15 @@
   const ABOVE_99_9 = "more than 99.9%";
 
   // One emptiness test for every name AND every title (shared across the three files): white space,
-  // Unicode format characters, and the invisible characters that are neither (combining grapheme joiner,
-  // Hangul fillers, Braille blank, variation selectors).
-  const BLANK_TEXT = /^[\s\p{Cf}͏ᅟᅠ⠀ㅤ︀-️ﾠ]*$/u;
-  const BLANK_EDGES = /^[\s\p{Cf}͏ᅟᅠ⠀ㅤ︀-️ﾠ]+|[\s\p{Cf}͏ᅟᅠ⠀ㅤ︀-️ﾠ]+$/gu;
+  // Unicode format characters, every character Unicode marks Default_Ignorable_Code_Point (combining grapheme
+  // joiner, Hangul fillers, Khmer vowel inherents, Mongolian selectors, variation selectors, tag characters),
+  // and the Braille blank (which draws as nothing but is not default-ignorable). The C0 and C1 controls and U+180F are NOT in the
+  // set: Chromium draws or advances them, so a name made of them is something a sighted reader sees.
+  const INVISIBLE_CHARS = "[\\s\\p{Cf}\\p{Default_Ignorable_Code_Point}\\u2800]";
+  // Mongolian free variation selector four is Default_Ignorable but Chromium draws it, so it is excluded where the class is used.
+  const INVISIBLE_ONE = `(?:(?!\\u180F)${INVISIBLE_CHARS})`;
+  const BLANK_TEXT = new RegExp(`^${INVISIBLE_ONE}*$`, "u");
+  const BLANK_EDGES = new RegExp(`^${INVISIBLE_ONE}+|${INVISIBLE_ONE}+$`, "gu");
 
   /** The noun for a count: "category" for one, "categories" otherwise. */
   /** True when the author gave a title: not undefined, null, empty or only spaces. A title of 0 counts. */
@@ -158,13 +163,18 @@
     return count === 1 ? "category" : "categories";
   }
 
+  // A whole number below this prints in full (JavaScript writes 1e21 and above in exponent form), so a
+  // whole-number total needs no rounding. Above 2^53 a double holds no fraction, so there is no noise to remove.
+  const WHOLE_TOTAL_PRINTS_IN_FULL = 1e21;
+
   /**
    * A total with float noise removed: twelve significant digits, unless it is
-   * a whole number below 2^53, which is exact already. A total with twelve or
-   * more whole digits keeps fifteen, so its fraction survives.
+   * a whole number, which is written as it is. A total with twelve or
+   * more whole digits keeps fifteen, so its fraction survives. A rounding that
+   * would overflow (a finite sum near the largest number) keeps the unrounded total.
    */
   function cleanTotal(total, places = 0) {
-    if (Number.isInteger(total) && Math.abs(total) <= Number.MAX_SAFE_INTEGER) {
+    if (Number.isInteger(total) && Math.abs(total) < WHOLE_TOTAL_PRINTS_IN_FULL) {
       return total;
     }
     const wholeDigits = String(Math.trunc(Math.abs(total))).length;
@@ -177,7 +187,8 @@
       wholeDigits >= LARGE_TOTAL_WHOLE_DIGITS
         ? LARGE_TOTAL_DIGITS
         : SIGNIFICANT_DIGITS;
-    return Number(total.toPrecision(digits));
+    const rounded = Number(total.toPrecision(digits));
+    return Number.isFinite(rounded) ? rounded : total;
   }
 
   /** The most decimal places any segment value is written with. */
@@ -245,19 +256,36 @@
       Math.abs(segment.value - anchor) <=
         FRACTION_TOLERANCE * Math.max(Math.abs(segment.value), Math.abs(anchor));
     const largest = segments.filter(tiedWith(first));
-    const smallest = segments.filter(tiedWith(last));
+    const allEqual = segments.length > 1 && largest.length === segments.length;
+    // The tolerance is not transitive: a middle value can sit within it of both ends while the ends are not
+    // tied with each other. The largest group keeps such a value, and the smallest group does not repeat it.
+    const smallest = segments
+      .filter(tiedWith(last))
+      .filter((segment) => allEqual || !largest.includes(segment));
     return {
       largest,
       smallest,
-      allEqual: segments.length > 1 && largest.length === segments.length,
+      allEqual,
+      largestSame: valuesAreSame(largest),
+      smallestSame: valuesAreSame(smallest),
     };
   }
 
-  /** "All four segments are equal" (two slices read "Both"). */
-  function allEqualLead(count) {
+  // Digits a double carries reliably: two values equal at this many significant digits differ by float noise at most.
+  const SAME_VALUE_DIGITS = 15;
+
+  /** True when the segments' values are one value to the digits a double carries, so "each" and "equal" are true. */
+  function valuesAreSame(group) {
+    const key = (segment) => Number(segment.value.toPrecision(SAME_VALUE_DIGITS));
+    return group.every((segment) => key(segment) === key(group[0]));
+  }
+
+  /** "All four segments are equal" (two slices read "Both"); "about equal" when the values differ. */
+  function allEqualLead(count, same = true) {
+    const equal = same ? "equal" : "about equal";
     return count === 2
-      ? "Both segments are equal"
-      : `All ${countWord(count)} segments are equal`;
+      ? `Both segments are ${equal}`
+      : `All ${countWord(count)} segments are ${equal}`;
   }
 
   // The kinds of section and list entry the pie model names. The adapter that
@@ -339,18 +367,21 @@
    * Y (v each, p each)".
    * @returns {Object} A list entry (model item)
    */
-  function extremeItem(kind, label, group, total) {
+  function extremeItem(kind, label, group, total, same = true) {
     const { text, term, item } = modelCore();
     const tied = group.length > 1;
     const each = tied ? [text(" each")] : [];
+    // A tie whose values differ lists each value, so "each" is never said of values that are not one value.
+    const values = tied && !same
+      ? joinRuns(group.map((segment) => [term("value", [text(formatValue(segment.value))])]))
+      : [term("value", [text(formatValue(group[0].value))]), ...each];
 
     return item(
       [
         text(`${label} segment${tied ? "s" : ""}: `),
         ...joinRuns(group.map((segment) => [segmentLabel(segment)])),
         text(" ("),
-        term("value", [text(formatValue(group[0].value))]),
-        ...each,
+        ...values,
         text(", "),
         term("percentage", [text(formatPercentage(group[0].value, total))]),
         ...each,
@@ -418,7 +449,7 @@
 
     if (ties.allEqual) {
       return [
-        text(`${allEqualLead(segments.length)}, at `),
+        text(`${allEqualLead(segments.length, ties.largestSame)}, at `),
         percentage,
         text(" each."),
       ];
@@ -544,8 +575,8 @@
       const ties = readTies(segments);
       if (!ties.allEqual && segments.length > 1) {
         insightItems.push(
-          extremeItem(PIE_ROLES.LARGEST, "Largest", ties.largest, total),
-          extremeItem(PIE_ROLES.SMALLEST, "Smallest", ties.smallest, total)
+          extremeItem(PIE_ROLES.LARGEST, "Largest", ties.largest, total, ties.largestSame),
+          extremeItem(PIE_ROLES.SMALLEST, "Smallest", ties.smallest, total, ties.smallestSame)
         );
       }
     }
