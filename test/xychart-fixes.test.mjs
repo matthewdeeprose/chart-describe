@@ -590,8 +590,8 @@ test("a blank title, axis title or series name is not quoted as an empty name", 
   assert.ok(out.lines.includes("Data table"));
   assert.ok(out.lines.includes("Category | Value"));
   const two = describe(chart(band(null, ["A", "B"]), [bar("North", [1, 2]), line(" ", [2, 1])]));
-  assert.ok(two.lines.includes("• Unlabelled series 2 falls."));
-  assert.ok(two.lines.includes("Category | North | Unlabelled series 2"));
+  assert.ok(two.lines.includes("• The line series falls."));
+  assert.ok(two.lines.includes("Category | North | Line series"));
   const ordinary = describe(chart(band(null, ["A", "B"]), [bar("North", [1, 2])]));
   assert.ok(ordinary.lines.includes("Category | North"));
   // One blank test for labels as well: Hangul filler (U+3164) is invisible and is not white space or a format character.
@@ -704,7 +704,7 @@ test("blank set: a category or series name of characters that draw as nothing re
     const cat = describe(chart(band(null, ["A", blank, "C"]), [bar("S", [1, 3, 2])]));
     assert.ok(cat.lines.includes("• Highest value: 3 (unlabelled category 2)."), JSON.stringify(blank));
     const named = describe(chart(band(null, ["A", "B"]), [bar(blank, [1, 3]), bar("Real", [2, 1])]));
-    assert.ok(named.lines.includes("• Highest value in unlabelled series 1: 3 (\"B\")."), JSON.stringify(blank));
+    assert.ok(named.lines.includes("• Highest value in the first bar series: 3 (\"B\")."), JSON.stringify(blank));
   }
 });
 
@@ -718,4 +718,129 @@ test("repeat key: edge characters outside plain format characters still count as
   assert.ok(front.lines.some((text) => text.includes("(position 2)")), "a Braille blank at the front repeats the label");
   const control = describe(AUTUMN("Autumn!"));
   assert.ok(!control.lines.some((text) => text.includes("(position 2)")), "a visible character is a different label");
+});
+
+
+// ---- Numbers at their edges, the spike and dip words, the invisible set ----
+
+
+test("average: a mean the decimals cannot hold is spoken inside the range, never as zero or as 0.12", () => {
+  const pair = describe(chart(band(null, ["A", "B"]), [bar("S", [0.123456789012345, 0.123456789012346])]));
+  assert.ok(pair.lines.includes("• Average value: 0.1234567890123455."));
+  const tiny = describe(chart(band(null, ["A", "B"]), [bar("S", [1e-15, 2e-15])]));
+  assert.ok(tiny.lines.includes("• Average value: 0.0000000000000015."));
+  const five = describe(chart(band(null, label(5)), [bar("S", [1e-9, 1.0000001e-9, 1.0000002e-9, 1.0000003e-9, 1.0000004e-9])]));
+  assert.ok(five.lines.includes("• Average value: 0.0000000010000002."));
+  // Just on the other side: ordinary means keep the banded text, and an all-equal series keeps its whole number.
+  assert.ok(describe(chart(band(null, ["A", "B"]), [bar("S", [100, 101])])).lines.includes("• Average value: 100.5."));
+  assert.ok(describe(chart(band(null, ["A", "B"]), [bar("S", [100.6, 100.8])])).lines.includes("• Average value: 100.7."));
+  assert.ok(describe(chart(band(null, label(5)), [bar("S", Array(5).fill(0.1 + 0.2))])).lines.includes("• Average value: 0.3."));
+});
+
+test("noise floor: a real mean is not erased on large integers, and 0.1 + 0.2 - 0.3 still reads zero", () => {
+  const real = describe(chart(band(null, ["A", "B"]), [bar("S", [10000000000000, -9999999999999])]));
+  assert.ok(real.lines.includes("• Average value: 0.5."));
+  const two = describe(chart(band(null, ["A", "B"]), [bar("North", [10000000000000, -9999999999999]), bar("South", [0, 0])]));
+  assert.equal(two.short, 'A bar chart for two categories. The "North" series shows the highest overall values.');
+  assert.ok(describe(chart(band(null, label(3)), [bar("S", [0.1, 0.2, -0.3])])).lines.includes("• Average value: 0."));
+});
+
+test("same average: means that differ are not called the same, float noise still is", () => {
+  const apart = describe(chart(band(null, ["x", "y"]), [bar("North", [1e15, 1e15]), bar("South", [1e15 + 4, 1e15 + 4])]));
+  assert.equal(apart.short, 'A bar chart for two categories. The "South" series shows the highest overall values.');
+  const near = describe(chart(band(null, ["x", "y"]), [bar("North", [1e13, 1e13]), bar("South", [1e13 + 0.05, 1e13 + 0.05])]));
+  assert.equal(near.short, 'A bar chart for two categories. The "South" series shows the highest overall values.');
+  const noise = describe(chart(band(null, ["x", "y"]), [bar("North", [0.3, 0.3]), bar("South", [0.1 + 0.2, 0.1 + 0.2])]));
+  assert.equal(noise.short, "A bar chart for two categories. The series have the same average.");
+});
+
+test("spread: data that varies never has a spread spoken as zero, however small", () => {
+  const tiny = describe(chart(band(null, label(5)), [bar("S", [0, 1e-16, 0, 1e-16, 0])]));
+  assert.ok(tiny.lines.includes("• Standard deviation: less than 0.000000000000001."));
+  assert.ok(describe(chart(band(null, label(5)), [bar("S", [0, 1e-9, 0, 1e-9, 0])])).lines.some((text) => text === "• Standard deviation: 0.0000000005."));
+  assert.ok(describe(chart(band(null, label(3)), [bar("S", [5, 5, 5])])).lines.every((text) => !text.includes("Standard deviation")));
+});
+
+test("spike and dip: said only when a few points in one stretch stand apart from a level series", () => {
+  const level = (before, at, after, value, odd) => Array.from({ length: before + at + after }, (_, i) => (i >= before && i < before + at ? odd : value));
+  const sentence = (values) => describe(chart(band(null, label(values.length)), [line("S", values)])).lines.find((text) => text.includes("mostly level"));
+  // The ends are the outliers: the level is NOT the spike (or the dip).
+  assert.equal(sentence([10, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 10]), undefined);
+  assert.equal(sentence([1, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 1]), undefined);
+  // Two spikes are not "a large spike".
+  assert.equal(sentence([0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0]), undefined);
+  // One spike, one dip and a two-point spike keep their words.
+  assert.equal(sentence(level(6, 1, 9, 0, 5)), '• The "S" series is mostly level, apart from a large spike.');
+  assert.ok(sentence(level(6, 1, 9, 5, 0)).includes("apart from a large dip"));
+  assert.equal(sentence(level(6, 2, 8, 0, 5)), '• The "S" series is mostly level, apart from a large spike.');
+});
+
+test("trend twice: no 'rises and falls repeatedly' beside 'consistently increasing'", () => {
+  const up = describe(chart(band(null, label(11)), [line("S", [10, 30, 20, 40, 30, 50, 60, 70, 80, 90, 100])]));
+  assert.ok(up.lines.includes('• The "S" series shows a consistently increasing trend, ranging from 10 to 100.'));
+  assert.ok(!up.lines.some((text) => text.includes("rises and falls repeatedly")));
+  const down = describe(chart(band(null, label(11)), [line("S", [100, 90, 95, 80, 85, 70, 60, 50, 40, 30, 10])]));
+  assert.ok(down.lines.some((text) => text.includes("consistently decreasing")));
+  assert.ok(!down.lines.some((text) => text.includes("rises and falls repeatedly")));
+  const cycle = describe(chart(band(null, label(7)), [line("Score", [10, 30, 12, 32, 11, 31, 13])]));
+  assert.ok(cycle.lines.includes("• The data rises and falls repeatedly, with three peaks and two troughs."));
+});
+
+test("mixed signs: no percentage above an average that the negative values have pulled down", () => {
+  for (const values of [[-50, 100, 0, 0, 0], [-50, 100, 20, 20, 20]]) {
+    const out = describe(chart(band(null, label(5)), [bar("S", values)]));
+    assert.ok(!out.short.includes("above the average"), JSON.stringify(values));
+    assert.ok(out.short.startsWith('A bar chart showing "S" for five categories. Values range from -50 to 100 with an average of'), JSON.stringify(values));
+  }
+  const sound = describe(chart(band(null, label(5)), [bar("Profit", [-1, 10, 11, 12, 100])]));
+  assert.ok(sound.lines.includes('• The highest value, 100 at "L5", is 279% above the average.'));
+});
+
+test("invisible set: Khmer vowels, Mongolian selectors and plane-14 selectors read as no name", () => {
+  for (const blank of ["឴", "឵", "᠋", "᠍", "\u{E0100}", "\u{E01EF}", "⁥"]) {
+    const where = `U+${blank.codePointAt(0).toString(16).toUpperCase()}`;
+    const cat = describe(chart(band(null, ["A", blank, "C"]), [bar("S", [1, 5, 2])]));
+    assert.ok(cat.lines.includes("• Highest value: 5 (unlabelled category 2)."), where);
+    const named = describe(chart(band(null, ["A", "B"]), [bar(blank, [1, 3]), bar("Real", [2, 1])]));
+    assert.ok(named.lines.some((text) => text.includes("a bar series and a second bar series named")), where);
+    const titled = describe({ ...chart(band(null, ["A", "B"]), [bar("S", [1, 3])]), title: blank });
+    assert.ok(!titled.short.includes("titled"), where);
+  }
+  // HALT (draws-nothing.mjs): the C0 and C1 controls and U+180F draw or advance in Chromium, so they stay names and are NOT in the class.
+  for (const drawn of ["\u0001", "\u0085", "\u007F", "᠏"]) {
+    const out = describe(chart(band(null, ["A", drawn, "C"]), [bar("S", [1, 5, 2])]));
+    assert.ok(out.lines.includes(`• Highest value: 5 ("${drawn}").`), `U+${drawn.codePointAt(0).toString(16).toUpperCase()} is quoted, not unlabelled`);
+  }
+  // Visible characters are still names, and a repeat key trims the same set at the edges.
+  assert.ok(describe(chart(band(null, ["A", "·", "C"]), [bar("S", [1, 5, 2])])).lines.includes('• Highest value: 5 ("·").'));
+  assert.ok(describe(AUTUMN("Autumn឴")).lines.some((text) => text.includes("(position 2)")));
+});
+
+
+// ---- Numbers are spoken and tabled in digits ----
+
+
+test("digits: a number JavaScript writes with an exponent is spoken and tabled in digits", () => {
+  const small = describe(chart(band(null, label(3)), [bar("S", [1e-7, 2e-7, 3e-7])]));
+  assert.ok(small.short.includes("Values range from about 0.0000001 to about 0.0000003 with an average of 0.0000002."));
+  assert.ok(small.lines.includes("Category | S"));
+  assert.ok(small.lines.includes("L1 | 0.0000001"));
+  const huge = describe(chart(band(null, label(2)), [bar("S", [1e21, 2e21])]));
+  assert.ok(huge.lines.some((text) => text.includes("1000000000000000000000")));
+  for (const out of [small, huge]) assert.ok(!out.lines.some((text) => /\d[eE][-+]?\d/.test(text)), "no exponent form is spoken");
+  // Just on the other side: a plain number is untouched.
+  assert.ok(describe(chart(band(null, label(3)), [bar("S", [0.000001, 2, 3])])).lines.includes("L1 | 0.000001"));
+});
+
+
+// ---- A blank series name reads as a missing one ----
+
+
+test("series order: a blank series name is numbered within its kind, like a missing one, and a lone series has no number", () => {
+  const three = describe(chart(band(null, label(4)), [bar("Alpha", [1, 2, 3, 4]), line("Beta", [1, 2, 3, 4]), line(" ", [2, 2, 3, 3])]));
+  assert.ok(three.lines.some((text) => text.includes("a line series named \"Beta\", and a second line series.")));
+  assert.ok(three.lines.includes("• The second line series shows a generally increasing trend."));
+  assert.ok(three.lines.includes("Category | Alpha | Beta | Line series 2"));
+  const lone = describe(chart(band(null, label(6)), [line(" ", [1, 2, 3, 4, 5, 6])]));
+  assert.ok(lone.lines.includes("• The line series shows a consistently increasing trend, ranging from 1 to 6."));
 });

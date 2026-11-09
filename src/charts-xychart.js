@@ -218,7 +218,7 @@
   const OVERALL_CHANGE_MIN_PERCENT = 50;
   // With a negative value in the series, the average must be at least this share of the largest absolute value
   // before a value is called a percentage above it (the signs cancel, and the average stops meaning "typical").
-  const MIXED_SIGN_MEAN_MIN_SHARE = 0.1;
+  const MIXED_SIGN_MEAN_MIN_SHARE = 0.25;
   // A start smaller than this share of the series' largest absolute value is "near zero".
   const NEAR_ZERO_START_SHARE = 0.01;
 
@@ -272,12 +272,23 @@
   // The most decimals that a rounded value may be given back to keep it true
   // (an average inside the range, a range whose two ends differ).
   const MAX_RESTORED_DECIMALS = 15;
+  // A double carries 17 significant figures.
+  const MAX_SIGNIFICANT_FIGURES = 17;
 
-  // Two series averages that agree to this many significant figures are equal.
-  const MEAN_COMPARE_REL_GAP = 1e-14;
+  // Summing n decimals can be wrong by up to about n x this x the largest absolute value (0.1 + 0.2 - 0.3 is 5.5e-17). A mean closer to 0
+  // than that is rounding noise; two means closer to each other than that are the same average. The bound grows with the count and
+  // scales with the data, so it is 3.3e-3 at 1e13 and never swallows a real mean on integers.
+  const FLOAT_ERROR_PER_VALUE = Number.EPSILON;
 
-  // A mean smaller than this share of the largest absolute value is rounding noise from summing decimals (0.1 + 0.2 - 0.3).
-  const MEAN_NOISE_SHARE = 1e-12;
+  /**
+   * The most that summing and averaging these values can be wrong by, from float error alone.
+   * @param {number} count - How many values were summed
+   * @param {number} largest - The largest absolute value
+   * @returns {number} The bound
+   */
+  function floatNoiseBound(count, largest) {
+    return count * FLOAT_ERROR_PER_VALUE * largest;
+  }
 
   // A bare four-digit label is called a year only inside this span. A run such
   // as 1000, 2000, 3000 is a set of bins, and the neutral noun is the true one.
@@ -540,7 +551,26 @@
    * @returns {string} The value as digits
    */
   function formatAuthorValue(value) {
-    return String(value);
+    return numberDigits(value);
+  }
+
+  /**
+   * A number in digits: exponent form is written out, because a screen reader says "2e-7" as letters and symbols.
+   * The same digit form as the radar family's `numberText`, nothing rounded.
+   * @param {number} value - A number
+   * @returns {string} Its digits
+   */
+  function numberDigits(value) {
+    const written = String(value);
+    // JavaScript switches to exponent form at 1e21 and above, and at 1e-7 and below.
+    const parts = /^(-?)(\d+)(?:\.(\d+))?e([+-]\d+)$/.exec(written);
+    if (!parts) return written;
+    const [, sign, whole, fraction = "", exponent] = parts;
+    const digits = whole + fraction;
+    const point = whole.length + Number(exponent);
+    if (point <= 0) return `${sign}0.${"0".repeat(-point)}${digits}`;
+    if (point >= digits.length) return sign + digits + "0".repeat(point - digits.length);
+    return `${sign}${digits.slice(0, point)}.${digits.slice(point)}`;
   }
 
   /**
@@ -567,7 +597,7 @@
    */
   function formatAuthorValueForTier(tier, value) {
     if (tier !== TIERS.SHORT) return formatAuthorValue(value);
-    const text = String(value);
+    const text = numberDigits(value);
     const point = text.indexOf(".");
     if (point === -1) return text;
     if (text.length - point - 1 <= SHORT_TIER_MAX_DECIMALS) return text;
@@ -575,7 +605,7 @@
     // A value that is not zero must not round to zero: keep two significant
     // figures instead (0.00001 is "about 0.00001", not "about 0.00").
     if (value !== 0 && Number(rounded) === 0) {
-      return `about ${dropTrailingZeros(value.toPrecision(2))}`;
+      return `about ${numberDigits(Number(value.toPrecision(2)))}`;
     }
     return `about ${rounded}`;
   }
@@ -604,7 +634,7 @@
         return { min: `about ${lowText}`, max: `about ${highText}` };
       }
     }
-    return { min: String(min), max: String(max) };
+    return { min: numberDigits(min), max: numberDigits(max) };
   }
 
   /**
@@ -616,7 +646,7 @@
    */
   function formatDerivedValue(value) {
     if (!Number.isFinite(value)) return String(value);
-    if (Number.isInteger(value)) return String(value);
+    if (Number.isInteger(value)) return numberDigits(value);
     const magnitude = Math.abs(value);
     const banded =
       magnitude >= 100
@@ -683,7 +713,19 @@
       const restored = dropTrailingZeros(mean.toFixed(decimals));
       if (inside(restored)) return restored;
     }
-    return banded;
+    // No figure up to 15 decimals is strictly inside (a range narrower than 1e-15, or a mean needing more digits): use the fewest
+    // significant figures that are, written as the range ends are.
+    let atAnEnd = null;
+    for (let decimals = 0; decimals <= MAX_RESTORED_DECIMALS; decimals += 1) {
+      const restored = dropTrailingZeros(mean.toFixed(decimals));
+      if (Number(restored) >= min && Number(restored) <= max) atAnEnd = restored;
+    }
+    // Only when the mean really is between the ends: an all-equal series (mean = both ends, off by float noise) keeps its banded text.
+    for (let figures = 1; strictlyInside && figures <= MAX_SIGNIFICANT_FIGURES; figures += 1) {
+      const spoken = numberDigits(Number(mean.toPrecision(figures)));
+      if (inside(spoken)) return spoken;
+    }
+    return atAnEnd !== null ? atAnEnd : banded;
   }
 
   /**
@@ -701,7 +743,8 @@
       const restored = dropTrailingZeros(spread.toFixed(decimals));
       if (Number(restored) !== 0) return restored;
     }
-    return banded;
+    // Varies, but by less than the smallest figure the search can print: say so rather than speak zero.
+    return `less than ${(10 ** -MAX_RESTORED_DECIMALS).toFixed(MAX_RESTORED_DECIMALS)}`;
   }
 
   /**
@@ -744,7 +787,7 @@
     const total = values.reduce((sum, value) => sum + value, 0);
     const rawMean = count > 0 ? total / count : 0;
     const largest = values.reduce((most, value) => Math.max(most, Math.abs(value)), 0);
-    const mean = Math.abs(rawMean) <= MEAN_NOISE_SHARE * largest ? 0 : rawMean;
+    const mean = Math.abs(rawMean) <= floatNoiseBound(count, largest) ? 0 : rawMean;
 
     let maxIndex = 0;
     let minIndex = 0;
@@ -827,6 +870,29 @@
   // "Consistently" also needs the end points to sit near the extremes: within this share of the range of the high (or low) at the end,
   // and of the low (or high) at the start.
   const CONSISTENT_END_SHARE = 0.25;
+  // A spike or a dip is held by this share of the points or fewer, in ONE stretch. A plateau or two spikes is not "a large spike".
+  const LEVEL_SPIKE_MAX_POINT_SHARE = 0.25;
+
+  /**
+   * True when the points for which `onFarSide` holds are few and form one unbroken stretch.
+   * @param {Array<number>} values - The series values in source order
+   * @param {Function} onFarSide - Takes a value, true when it is on the far side of the series' midpoint
+   * @returns {boolean} Whether they are one short stretch
+   */
+  function isOneShortStretch(values, onFarSide) {
+    let far = 0;
+    let stretches = 0;
+    let previous = false;
+    for (const value of values) {
+      const current = onFarSide(value);
+      if (current) {
+        far += 1;
+        if (!previous) stretches += 1;
+      }
+      previous = current;
+    }
+    return far > 0 && stretches === 1 && far <= LEVEL_SPIKE_MAX_POINT_SHARE * values.length;
+  }
   // A generally-increasing or decreasing trend needs a fitted line that agrees with the end points and rises
   // (or falls) by at least this share of the range across the whole series.
   const FITTED_RISE_MIN_SHARE = 0.1;
@@ -899,8 +965,9 @@
       const scale = Math.max(...values.map((value) => Math.abs(value)));
       if (range > LEVEL_SPIKE_MIN_SHARE * scale) {
         const ends = [values[0], values[values.length - 1]];
-        if (Math.max(...values) - Math.max(...ends) > LEVEL_SPIKE_STICK_OUT * range) return TRENDS.LEVEL_SPIKE;
-        if (Math.min(...ends) - Math.min(...values) > LEVEL_SPIKE_STICK_OUT * range) return TRENDS.LEVEL_DIP;
+        const midpoint = (high + low) / 2;
+        if (Math.max(...values) - Math.max(...ends) > LEVEL_SPIKE_STICK_OUT * range && isOneShortStretch(values, (value) => value > midpoint)) return TRENDS.LEVEL_SPIKE;
+        if (Math.min(...ends) - Math.min(...values) > LEVEL_SPIKE_STICK_OUT * range && isOneShortStretch(values, (value) => value < midpoint)) return TRENDS.LEVEL_DIP;
       }
       return TRENDS.STABLE;
     }
@@ -1168,7 +1235,6 @@
   function seriesColumnHeader(series, allSeries) {
     const { text, author } = modelCore();
     const identity = seriesIdentity(series, allSeries);
-    if (identity.unlabelled) return [text(`Unlabelled series ${identity.overallPosition}`)];
     if (identity.name) {
       const sameName = allSeries.filter((one) => seriesNameKey(one) === seriesNameKey(series));
       if (sameName.length > 1) return [author(identity.name), text(` (series ${sameName.indexOf(series) + 1})`)];
@@ -1182,17 +1248,20 @@
   // Characters that draw as nothing: white space, Unicode format characters (zero-width space, joiner and the like), the combining
   // grapheme joiner, the Hangul fillers, the braille blank U+2800 and the variation selectors. One class serves every name and every
   // label, so nothing is blank in one place and visible in another.
-  const INVISIBLE_CHARS = String.raw`\s\p{Cf}\u034F\u115F\u1160\u2800\u3164\uFE00-\uFE0F\uFFA0`;
+  const INVISIBLE_CHARS = String.raw`\s\p{Cf}\p{Default_Ignorable_Code_Point}\u2800`;
+  // The one default-ignorable code point that Chromium draws or advances (Mongolian free variation selector four) is not blank.
+  const DRAWN_IGNORABLE = String.raw`\u180F`;
+  const INVISIBLE_ONE = `(?:(?!${DRAWN_IGNORABLE})[${INVISIBLE_CHARS}])`;
 
   // A label is blank when it holds only invisible characters.
-  const BLANK_LABEL = new RegExp(`^[${INVISIBLE_CHARS}]*$`, "u");
+  const BLANK_LABEL = new RegExp(`^${INVISIBLE_ONE}*$`, "u");
   // A series name compared by what it sounds like: edge white space and format characters are dropped.
   function seriesNameKey(series) {
     return typeof series.name === "string" ? series.name.replace(LABEL_EDGES, "") : "";
   }
 
   // White space and format characters at either end of a label do not change how it sounds or looks.
-  const LABEL_EDGES = new RegExp(`^[${INVISIBLE_CHARS}]+|[${INVISIBLE_CHARS}]+$`, "gu");
+  const LABEL_EDGES = new RegExp(`^${INVISIBLE_ONE}+|${INVISIBLE_ONE}+$`, "gu");
 
   /**
    * True when the label at this index appears more than once on the axis, so a
@@ -1253,7 +1322,6 @@
     const { text, author } = modelCore();
     const identity = seriesIdentity(series, allSeries);
 
-    if (identity.unlabelled) return [text(`unlabelled series ${identity.overallPosition}`)];
     if (identity.name) {
       // Two series with one name are told apart by their order.
       const sameName = allSeries.filter((one) => seriesNameKey(one) === seriesNameKey(series));
@@ -1716,8 +1784,10 @@
       // only by floating-point noise are equal and means that differ at the thirteenth figure are not.
       const means = series.map((one) => computeStatistics(one.values).mean);
       const highestMean = Math.max(...means);
-      const sameMean = (a, b) => Math.abs(a - b) <= MEAN_COMPARE_REL_GAP * Math.max(Math.abs(a), Math.abs(b));
-      const leaders = series.filter((one, i) => sameMean(means[i], highestMean));
+      const highestAt = means.indexOf(highestMean);
+      const bounds = series.map((one) => floatNoiseBound(one.values.length, Math.max(...one.values.map((value) => Math.abs(value)))));
+      const sameMean = (i) => Math.abs(means[i] - highestMean) <= bounds[i] + bounds[highestAt];
+      const leaders = series.filter((one, i) => sameMean(i));
       // A mean that is not a number (outside the stated input) names the first series, as before.
       if (leaders.length === 0) leaders.push(series[0]);
       if (leaders.length === series.length) {
@@ -2558,7 +2628,9 @@
     if (stats.count <= LINE_ADVANCED_MIN_POINTS) return items;
 
     const shape = countPeaksAndTroughs(series.values);
-    if (shape.peaks > 1 && shape.troughs > 1) {
+    const lineTrend = analyseTrend(series.values);
+    const saysConsistent = lineTrend === TRENDS.UP || lineTrend === TRENDS.DOWN;
+    if (shape.peaks > 1 && shape.troughs > 1 && !saysConsistent) {
       items.push(
         item([
           text(
