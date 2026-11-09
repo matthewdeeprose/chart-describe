@@ -445,3 +445,78 @@ test("repeat key: a label with an edge character that draws as nothing repeats t
   const plain = radarText({ axisLabels: ["Quality!", "Quality", "C"], seriesList: [["S", [1, 2, 3]]] });
   assert.ok(!axesSentence(plain.lines).includes("(axis"), "a visible character is a different label");
 });
+
+// The average keeps searching while it sits on an extreme, a series that overflows is refused,
+// the ring count is written in digits and a ticks value that is not finite is refused, and the invisible set is wider.
+const onesWithOneZero = (n) => Array.from({ length: n }, (_, index) => (index === 0 ? 0 : 1));
+const manyAxes = (n) => Array.from({ length: n }, (_, index) => `X${index + 1}`);
+
+test("20 or more axes: one zero among ones does not read as the highest value", () => {
+  for (const [n, want] of [[10, "0.9"], [19, "0.9"], [20, "0.95"], [30, "0.97"], [100, "0.99"], [1000, "0.999"]]) {
+    const text = radarText({ axisLabels: manyAxes(n), seriesList: [["S", onesWithOneZero(n)]] });
+    assert.ok(seriesLines(text.lines)[0].startsWith(`1. "S", averaging ${want}. `), `${n} axes: ${seriesLines(text.lines)[0].slice(0, 40)}`);
+  }
+});
+
+test("a figure that still sits on an extreme after the last place says about", () => {
+  const text = radarText({ axisLabels: manyAxes(3000), seriesList: [["S", onesWithOneZero(3000)]] });
+  assert.ok(seriesLines(text.lines)[0].startsWith('1. "S", averaging about 1. '), seriesLines(text.lines)[0].slice(0, 40));
+});
+
+test("an average that is exactly on an extreme, or equal values, never says about", () => {
+  assert.ok(seriesLines(radarText({ axisLabels: THREE, seriesList: [["S", [2, 2, 2]]] }).lines)[0].startsWith('1. "S", averaging 2. '));
+  assert.ok(seriesLines(radarText({ axisLabels: THREE, seriesList: [["S", [0, 3, 3]]] }).lines)[0].startsWith('1. "S", averaging 2. '));
+});
+
+test("a series whose finite values add up past the largest number is refused, not described as Infinity", () => {
+  assert.throws(() => radarText({ axisLabels: ["A", "B"], seriesList: [["S", [1.7e308, 1.7e308]]] }), {
+    name: "RangeError",
+    message: "The radar values add up to more than a number can hold.",
+  });
+  const fits = radarText({ axisLabels: ["A", "B"], seriesList: [["S", [1e307, 1e307]]] });
+  assert.ok(seriesLines(fits.lines)[0].startsWith('1. "S", averaging 10000000'), "a large sum that still fits is described");
+});
+
+test("a series of the smallest numbers is never described as NaN", () => {
+  const text = radarText({ axisLabels: ["A", "B"], seriesList: [["S", [5e-324, 1e-323]]] });
+  assert.ok(!/NaN|Infinity/.test(seriesLines(text.lines)[0]));
+});
+
+test("the ring count is written in digits, and a ticks value that is not finite is refused", () => {
+  assert.equal(
+    gridLine(radarText({ ticks: 1e21, axisLabels: THREE, seriesList: [["S", [1, 2, 3]]] }).lines),
+    "The grid has 1000000000000000000000 circular rings, and a legend names the series.",
+  );
+  for (const ticks of [Infinity, -Infinity, NaN]) {
+    assert.throws(() => radarText({ ticks, axisLabels: THREE, seriesList: [["S", [1, 2, 3]]] }), { name: "RangeError" }, String(ticks));
+  }
+  assert.equal(
+    gridLine(radarText({ ticks: 10, axisLabels: THREE, seriesList: [["S", [1, 2, 3]]] }).lines),
+    "The grid has 10 circular rings, and a legend names the series.",
+  );
+});
+
+for (const [name, invisible] of [
+  ["Mongolian free variation selector U+180B", "᠋"],
+  ["Khmer inherent vowel U+17B4", "឴"],
+  ["variation selector 17 U+E0100", "\u{E0100}"],
+  ["unassigned default-ignorable U+2065", "⁥"],
+]) {
+  test(`a label or title of only ${name} reads as unlabelled, and a visible label is still a name`, () => {
+    const text = radarText({ title: invisible, axisLabels: [invisible, "B", "C"], seriesList: [[invisible, [1, 2, 3]]] });
+    assert.ok(axesSentence(text.lines).includes("unlabelled axis 1"), axesSentence(text.lines));
+    assert.ok(seriesLines(text.lines)[0].startsWith("1. Unlabelled series 1, "), seriesLines(text.lines)[0]);
+    assert.equal(text.short, "A radar chart with three axes and one series.");
+    const inside = radarText({ axisLabels: [`A${invisible}B`, "B", "C"], seriesList: [["S", [1, 2, 3]]] });
+    assert.ok(axesSentence(inside.lines).includes(`"A${invisible}B"`), "a label with the character inside is still a name");
+  });
+}
+
+test("the C0 and C1 controls and U+180F draw in Chromium, so a label or title of them stays a name", () => {
+  for (const drawn of ["\u0000", "\u0001", "\u007F", "\u0085", "\u180F"]) {
+    const shown = JSON.stringify(drawn);
+    const text = radarText({ title: drawn, axisLabels: [drawn, "B", "C"], seriesList: [["S", [1, 2, 3]]] });
+    assert.ok(!axesSentence(text.lines).includes("unlabelled axis 1"), shown);
+    assert.ok(text.short.includes("titled"), shown);
+  }
+});

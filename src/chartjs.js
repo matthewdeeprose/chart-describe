@@ -102,6 +102,9 @@
     BUILDER_ERROR_PREFIX: "builder-error: ",
   });
 
+  // The words the shared builders' overflow refusals share ("... add up to more than a number can hold.").
+  const OVERFLOW_MESSAGE = /add up to more than a number can hold/;
+
   const UNSUPPORTED_BY_TYPE = Object.freeze({
     doughnut: REASONS.UNSUPPORTED_TYPE_DOUGHNUT,
     polarArea: REASONS.UNSUPPORTED_TYPE_POLAR_AREA,
@@ -682,6 +685,13 @@
       return { supported: true, ...tiers };
     } catch (err) {
       logWarn("describe failed", err);
+      // A builder that sums in its own order can overflow where the adapter's check, in the order
+      // given, did not: [1e308, -1e308, 1e308] is finite, but sorted high to low it passes the
+      // largest number. The builders refuse it with a RangeError whose message says so; that is the
+      // same refusal as the adapter's own, not a fault in the builder.
+      if (err instanceof RangeError && OVERFLOW_MESSAGE.test(err.message)) {
+        return unsupported(REASONS.NON_FINITE_TOTAL);
+      }
       return unsupported(REASONS.BUILDER_ERROR_PREFIX + err.message);
     }
   }

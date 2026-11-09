@@ -124,6 +124,17 @@
   // author can make, and far above the error that one binary sum leaves.
   const HALF_TOLERANCE = 1e-9;
 
+  // The message of the error that a radar with a ticks value that is not finite is refused with.
+  const RADAR_TICKS_NOT_FINITE = "The radar ticks value is not a finite number.";
+
+  // The message of the error that a series whose finite values add up to more than a number can hold is refused with.
+  const RADAR_TOTAL_OVERFLOW = "The radar values add up to more than a number can hold.";
+
+  // How many decimal places past the series' own the average may use while its figure still sits
+  // on the highest or lowest value. Past this the average is
+  // written with "about".
+  const EXTRA_PLACES_ON_EXTREME = 3;
+
   // Reads the decimal places and the exponent out of a number's shortest
   // round-trip text, for example "0.25" or "1.5e-7".
   const NUMBER_TEXT_PATTERN = /^\d+(?:\.(\d+))?(?:e([+-]\d+))?$/;
@@ -160,7 +171,7 @@
     if (Number.isInteger(value) && value >= 0 && value <= 9) {
       return textCore().narrationNumber(value);
     }
-    return String(value);
+    return numberText(value);
   }
 
   /**
@@ -266,14 +277,19 @@
   }
 
   // The characters that draw as nothing: white space, Unicode format characters (such as a
-  // zero-width space), and the seven that are neither yet still draw as nothing: the combining
-  // grapheme joiner U+034F, the Hangul fillers U+115F, U+1160, U+3164 and U+FFA0, the Braille
-  // blank U+2800, and the variation selectors U+FE00 to U+FE0F. ONE class serves every name and
-  // every title, so no name is blank in one place and visible in another.
-  const INVISIBLE_CHARS = String.raw`\s\p{Cf}\u034F\u115F\u1160\u2800\u3164\uFE00-\uFE0F\uFFA0`;
+  // zero-width space), every character Unicode itself calls Default_Ignorable_Code_Point (this
+  // covers the combining grapheme joiner U+034F, the Hangul fillers U+115F, U+1160, U+3164 and
+  // U+FFA0, the variation selectors U+FE00 to U+FE0F and U+E0100 to U+E01EF, the Khmer vowel
+  // inherent U+17B4 and U+17B5, the Mongolian selectors U+180B to U+180D and U+180F, and U+2065),
+  // and the Braille blank U+2800 (which is not default-ignorable). The C0 and C1 controls and U+180F are NOT in the set:
+  // Chromium draws or advances them, and U+180F is excluded by lookahead below. ONE
+  // class serves every name and every title, so no name is blank in one place and visible in another.
+  const INVISIBLE_CHARS = String.raw`\s\p{Cf}\p{Default_Ignorable_Code_Point}\u2800`;
+  // Mongolian free variation selector four is Default_Ignorable but Chromium draws it, so it is not blank.
+  const INVISIBLE_ONE = `(?:(?!\\u180F)[${INVISIBLE_CHARS}])`;
 
   /** A label or title with nothing visible in it. */
-  const BLANK_LABEL = new RegExp(`^[${INVISIBLE_CHARS}]*$`, "u");
+  const BLANK_LABEL = new RegExp(`^${INVISIBLE_ONE}*$`, "u");
 
   /**
    * Is a label empty, or made only of characters that draw as nothing?
@@ -339,7 +355,7 @@
   }
 
   /** Characters that draw as nothing, at either end of a label. */
-  const LABEL_EDGES = new RegExp(`^[${INVISIBLE_CHARS}]+|[${INVISIBLE_CHARS}]+$`, "gu");
+  const LABEL_EDGES = new RegExp(`^${INVISIBLE_ONE}+|${INVISIBLE_ONE}+$`, "gu");
 
   /**
    * The key two labels are compared by. White space and format characters at
@@ -671,6 +687,9 @@
   function buildGridSentence(facts) {
     const options = facts.options;
     const shape = options.graticule === "polygon" ? "polygonal" : "circular";
+    // A ticks value that is not finite draws no picture the words could state (the loop would never
+    // end for Infinity), so refuse it, as the pie refuses a total that overflows.
+    if (!Number.isFinite(options.ticks)) throw new RangeError(RADAR_TICKS_NOT_FINITE);
     // A negative ticks value draws no ring (the loop never runs), so it reads "no rings".
     const ringCount = Math.max(0, Math.ceil(options.ticks));
     const rings =
@@ -704,17 +723,64 @@
    * so on; the first result inside the values is used. Equal values take the
    * same path: the mean equals the value, so the search stops at the value.
    *
-   * THE SEARCH STOPS AT THE SERIES' OWN LARGEST NUMBER OF DECIMAL PLACES. The
-   * lowest and highest values are exact at that precision, and rounding keeps
-   * order, so a mean between them rounds to a figure between them. If floating
-   * point ever defeats that, the figure at that precision is used and a warning
-   * is logged.
+   * THE SEARCH GOES BEYOND THE SERIES' OWN LARGEST NUMBER OF DECIMAL PLACES
+   * only to keep a figure off the highest or lowest value. At the series' own
+   * places the lowest and highest values are exact, and rounding keeps order,
+   * so a mean between them rounds to a figure between them. A figure that
+   * sits ON the highest or lowest value while the mean is not that value is
+   * passed over for one more place, and again, up to EXTRA_PLACES_ON_EXTREME
+   * beyond the series' own (a bound of one place would leave 20 or more axes
+   * reading as an extreme). If the last place still sits on one, the
+   * first figure inside is used and `averagePhrase` writes "about" before it.
+   * If floating point ever defeats the search, the figure at that precision is
+   * used and a warning is logged.
    *
    * @param {number[]} values - A series' values
    * @returns {number} The rounded mean
    */
   function roundedMean(values) {
-    const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+    return averageOf(values).figure;
+  }
+
+  /**
+   * The average of a series as the sentence gives it: `averaging 3`, or `averaging about 1` when the
+   * search ran out of places while the figure still sat on the highest or lowest value.
+   *
+   * @param {number[]} values - A series' values
+   * @returns {string} The words after "averaging ", without the full stop
+   */
+  function averagePhrase(values) {
+    const { figure, approximate } = averageOf(values);
+    return approximate ? `about ${numberText(figure)}` : numberText(figure);
+  }
+
+  /**
+   * The mean of the values. Finite values can still sum past the largest number, and then the
+   * mean would read Infinity, so such a series is refused with a RangeError, as the pie refuses a
+   * total that overflows. (Dividing each value first was tried: it gives 1.6499999999999999e308 for
+   * 1.7e308 and 1.6e308, a figure no author wrote.) Any finite sum is used as before, so no
+   * ordinary mean moves.
+   *
+   * @param {number[]} values - A series' values
+   * @returns {number} The mean
+   */
+  function meanOf(values) {
+    const sum = values.reduce((total, value) => total + value, 0);
+    if (!Number.isFinite(sum) && values.every(Number.isFinite)) {
+      throw new RangeError(RADAR_TOTAL_OVERFLOW);
+    }
+    return sum / values.length;
+  }
+
+  /**
+   * The search that `roundedMean` documents, with its result and whether it ran out of places.
+   *
+   * @param {number[]} values - A series' values
+   * @returns {{figure: number, approximate: boolean}} The figure, and true when it still sits on
+   *   the highest or lowest value after the last place
+   */
+  function averageOf(values) {
+    const mean = meanOf(values);
     const lowest = Math.min(...values);
     const highest = Math.max(...values);
     const lastPlaces = Math.max(...values.map(decimalPlaces));
@@ -722,21 +788,28 @@
     // Whole number first; then one decimal place, two, and so on, until the
     // result lies inside the series' own values (inclusive). A result that
     // sits ON the highest or lowest value, when the mean is not that value,
-    // is passed over for one more decimal place (at most one beyond the
-    // series' own), so the figure does not read as an extreme. A series whose
-    // values are all equal has its mean on both extremes, so its first result
-    // stands and the extra place is never tried.
+    // is passed over for one more decimal place, and again while it still
+    // sits there, up to EXTRA_PLACES_ON_EXTREME beyond the series' own, so the
+    // figure does not read as an extreme. A series whose values are all equal
+    // has its mean on both extremes, so its first result stands and the extra
+    // place is never tried. A place whose scale is not a finite number ends the
+    // search (a series of the smallest numbers has 324 places).
     let rounded = 0;
     let firstInside = null;
-    for (let places = 0; places <= lastPlaces + 1; places += 1) {
+    for (let places = 0; places <= lastPlaces + EXTRA_PLACES_ON_EXTREME; places += 1) {
+      if (!Number.isFinite(10 ** places)) break;
       rounded = roundHalfAwayFromZero(mean, places);
       if (rounded < lowest || rounded > highest) continue;
       if (firstInside === null) firstInside = rounded;
       const onExtreme = lowest !== highest && (rounded === lowest || rounded === highest);
       const exact = Math.abs(rounded - mean) <= HALF_TOLERANCE * Math.max(1, Math.abs(mean));
-      if (!onExtreme || exact) return rounded;
+      if (!onExtreme || exact) return { figure: rounded, approximate: false };
     }
-    if (firstInside !== null) return firstInside;
+    if (firstInside !== null) return { figure: firstInside, approximate: true };
+
+    // No place could state a figure inside the values: the mean is finer than the largest scale.
+    // The mean itself is then the true figure.
+    if (mean >= lowest && mean <= highest) return { figure: mean, approximate: false };
 
     logWarn("The average lies outside the series at its own precision", {
       mean,
@@ -744,7 +817,7 @@
       highest,
       places: lastPlaces,
     });
-    return rounded;
+    return { figure: rounded, approximate: false };
   }
 
   /**
@@ -883,7 +956,7 @@
     }
 
     const disclosure = facts.legend ? "" : " (named in the code, not in the picture)";
-    const averaging = facts.noRange ? "" : `, averaging ${numberText(roundedMean(curve.values))}`;
+    const averaging = facts.noRange ? "" : `, averaging ${averagePhrase(curve.values)}`;
     return item(
       [
         ...label,

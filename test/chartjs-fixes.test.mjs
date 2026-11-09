@@ -182,3 +182,12 @@ test("a bar or line whose values sum past the largest number is refused, not des
   assert.equal(lib.chartjs.describe(large).supported, true, "a large total that still fits is described");
   assert.ok(!JSON.stringify(lib.chartjs.describe(large)).includes("Infinity"));
 });
+
+// The builder's own overflow refusal is the adapter's refusal, whatever order the values sum in.
+test("a pie whose values sum within range in the order given but past it high to low is refused as non-finite-total", () => {
+  const NON_FINITE_TOTAL = { supported: false, reason: "non-finite-total" };
+  const pie = (data) => ({ type: "pie", data: { labels: data.map((_, index) => `S${index + 1}`), datasets: [{ data }] } });
+  assert.deepEqual(lib.chartjs.describe(pie([1e308, -1e308, 1e308])), NON_FINITE_TOTAL);
+  assert.deepEqual(lib.chartjs.describe(pie([1e308, 1e308, -1e308])), NON_FINITE_TOTAL, "the order the adapter already refused");
+  assert.equal(lib.chartjs.describe(pie([1e307, -1e307, 1e307])).supported, true, "a sum that stays in range is described");
+});
