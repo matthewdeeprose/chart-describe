@@ -604,3 +604,109 @@ test("23c: a middle value within the tolerance of both ends is named once", () =
   assert.ok(detailed.includes("• Largest segments: A and B (1.0000000000015 and 1.00000000000075, 33.3% each)"), detailed);
   assert.ok(detailed.includes("• Smallest segment: C (1, 33.3%)"), detailed);
 });
+
+// Rule 24: the values are added with a compensated sum, so a small value beside a huge one is not lost
+
+test("24a: a total keeps small values beside a huge one, and the largest reads more than 99.9%", () => {
+  const three = describe("", [["A", 1e16], ["B", 1], ["C", 1]]);
+  assert.ok(three.detailed.includes("• Total: 10000000000000002"), three.detailed);
+  assert.ok(three.short.endsWith("A is the largest segment at more than 99.9%, representing over half of the total."), three.short);
+  // The exact sum 20000000000000003 is not a double; the total is the nearest one.
+  assert.ok(describe("", [["A", 2e16], ["B", 1], ["C", 1], ["D", 1]]).detailed.includes("• Total: 20000000000000004"));
+});
+
+test("24b: float noise in a sum still reads as the plain total", () => {
+  assert.ok(describe("", [["A", 0.1], ["B", 0.2], ["C", 0.3]]).detailed.includes("• Total: 0.6"));
+  assert.ok(describe("", [["A", 0.1], ["B", 0.2], ["C", -0.3]]).detailed.includes("• Total: 0"));
+  assert.ok(describe("", [["North", 40], ["South", 35], ["East", 25]]).detailed.includes("• Total: 100"));
+});
+
+// Rule 25: two whole numbers are one value only when they are equal
+
+test("25a: whole numbers that differ read about equal, and their values are listed", () => {
+  assert.ok(describe("", [["A", 2345678901234567], ["B", 2345678901234568]]).short.endsWith("Both segments are about equal, at 50.0% each."));
+  const above = describe("", [["A", 1e16], ["B", 10000000000000002], ["C", 1]]);
+  assert.ok(above.detailed.includes("• Largest segments: B and A (10000000000000002 and 10000000000000000, 50.0% each)"), above.detailed);
+});
+
+test("25b: equal whole numbers and a float-noise tie keep equal and each", () => {
+  assert.ok(describe("", [["A", 5], ["B", 5], ["C", 5]]).short.endsWith("All three segments are equal, at 33.3% each."));
+  assert.ok(describe("", [["A", 0.1 + 0.2], ["B", 0.3]]).short.endsWith("Both segments are equal, at 50.0% each."));
+});
+
+// Rule 26: a tie line gives one percentage only when every member's own row prints it
+
+test("26: a tie whose members' shares print differently lists each share", () => {
+  const { detailed } = describe("", [["A", 98000000000000], ["B", 97999999999999], ["C", 604000000000001]]);
+  assert.ok(detailed.includes("• Smallest segments: A and B (98000000000000 and 97999999999999, 12.3% and 12.2%)"), detailed);
+  assert.ok(detailed.includes("• A: 98000000000000 (12.3%)") && detailed.includes("• B: 97999999999999 (12.2%)"), detailed);
+  assert.ok(describe("", [["North", 40], ["South", 40], ["East", 20]]).detailed.includes("• Largest segments: North and South (40 each, 40.0% each)"));
+});
+
+// Rule 27: a whole-number total is written as it is, at any size
+
+test("27: a total from 1e21 with a fractional segment is not rounded to fifteen digits", () => {
+  const { detailed } = describe("", [["A", 1.2345678901234568e22], ["B", 0.5]]);
+  assert.ok(detailed.includes("• Total: 12345678901234568000000"), detailed);
+  assert.ok(describe("", [["A", 2e21], ["B", 2e21]]).detailed.includes("• Total: 4000000000000000000000"));
+});
+
+// Rule 28: names that look and sound the same are repeats
+
+test("28a: names equal after NFC, inside invisible characters and a no-break space carry their position", () => {
+  const pairs = [["Café", "Café"], ["North", "No​rth"], ["New York", "New York"], ["North", "Nor­th"]];
+  for (const [one, two] of pairs) {
+    const lines = describe("", [[one, 30], [two, 20], ["Other", 50]]).lines;
+    assert.ok(lines.includes(`• ${one} (segment 1): 30 (30.0%)`) && lines.includes(`• ${two} (segment 2): 20 (20.0%)`), JSON.stringify([one, two]));
+  }
+});
+
+test("28b: case, lookalike letters and a missing space stay different names", () => {
+  for (const [one, two] of [["North", "NORTH"], ["North", "Nоrth"], ["New York", "NewYork"]]) {
+    const lines = describe("", [[one, 30], [two, 20], ["Other", 50]]).lines;
+    assert.ok(lines.includes(`• ${one}: 30 (30.0%)`) && lines.includes(`• ${two}: 20 (20.0%)`), JSON.stringify([one, two]));
+  }
+});
+
+// Rule 29: the share of two whole numbers is exactly half only when it is
+
+test("29: whole numbers are exactly half only when the largest is half the total", () => {
+  assert.ok(describe("", [["A", 1000000000000], ["B", 1000000000002], ["C", 2000000000000]]).short.endsWith("C is the largest segment at 50.0%, representing about half of the total."));
+  assert.ok(describe("", [["A", 2], ["B", 1], ["C", 1]]).short.endsWith("A is the largest segment at 50.0%, representing exactly half of the total."));
+  assert.ok(describe("", [["A", 0.3], ["B", 0.1], ["C", 0.2]]).short.endsWith("A is the largest segment at 50.0%, representing exactly half of the total."));
+});
+
+// Rule 30: percentages round halves away from zero
+
+test("30: a share that is exactly a half-tenth rounds up", () => {
+  const { detailed } = describe("", [["S1", 6.4], ["S2", 75.5], ["S3", 86.1]]);
+  assert.ok(detailed.includes("• S3: 86.1 (51.3%)"), detailed);
+  // Two whole numbers are worked out exactly: 3000000000000 of 3200000000001 is 93.7499...%, not a half.
+  assert.ok(describe("", [["A", 200000000001], ["B", 3000000000000]]).detailed.includes("• B: 3000000000000 (93.7%)"));
+  assert.ok(describe("", [["A", 1], ["B", 2]]).detailed.includes("• A: 1 (33.3%)"));
+});
+
+// ---- The marks Chromium draws are names, and the one compensated sum still refuses an overflow ----
+
+const DRAWN_MARK_RANGES = [[0x600, 0x605], [0x6dd, 0x6dd], [0x70f, 0x70f], [0x890, 0x891], [0x8e2, 0x8e2], [0x1680, 0x1680], [0xfff9, 0xfffb], [0x110bd, 0x110bd], [0x110cd, 0x110cd], [0x13430, 0x1343f], [0x1bca0, 0x1bca3]];
+const DRAWN_MARKS_ALL = DRAWN_MARK_RANGES.flatMap(([from, to]) => Array.from({ length: to - from + 1 }, (_, i) => String.fromCodePoint(from + i)));
+
+test("a title or a name made of one of the 37 drawn marks is a name; the members that only advance stay blank", () => {
+  assert.equal(DRAWN_MARKS_ALL.length, 37);
+  for (const mark of DRAWN_MARKS_ALL) {
+    const shown = "U+" + mark.codePointAt(0).toString(16);
+    assert.ok(describe(mark, [["A", 1], ["B", 2]]).short.startsWith(`A pie chart titled "${mark}"`), shown);
+    const { lines } = describe("", [["Real", 50], [mark, 30], ["Other", 20]]);
+    assert.ok(!categoryList(lines).includes("• Unlabelled segment 2"), shown);
+  }
+  for (const blank of ["\u200B", "\u034F", "\u17B4", "\u2800", "\uFEFF", "\u00AD"]) {
+    const shown = "U+" + blank.codePointAt(0).toString(16);
+    assert.ok(describe(blank, [["A", 1], ["B", 2]]).short.startsWith("A pie chart showing"), shown);
+    assert.ok(categoryList(describe("", [["Real", 50], [blank, 30], ["Other", 20]]).lines).includes("• Unlabelled segment 2"), shown);
+  }
+});
+
+test("the one compensated sum: values that overflow a sum are still refused, and a small value beside a huge one is kept", () => {
+  assert.throws(() => describe("", [["A", Number.MAX_VALUE], ["B", Number.MAX_VALUE]]), RangeError);
+  assert.ok(describe("", [["A", 1e16], ["B", 1], ["C", 1]]).detailed.includes("• Total: 10000000000000002"));
+});

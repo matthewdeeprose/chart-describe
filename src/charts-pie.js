@@ -148,8 +148,12 @@
   // and the Braille blank (which draws as nothing but is not default-ignorable). The C0 and C1 controls and U+180F are NOT in the
   // set: Chromium draws or advances them, so a name made of them is something a sighted reader sees.
   const INVISIBLE_CHARS = "[\\s\\p{Cf}\\p{Default_Ignorable_Code_Point}\\u2800]";
-  // Mongolian free variation selector four is Default_Ignorable but Chromium draws it, so it is excluded where the class is used.
-  const INVISIBLE_ONE = `(?:(?!\\u180F)${INVISIBLE_CHARS})`;
+  // Characters in the invisible set that Chromium nonetheless draws as ink: U+180F (Mongolian free variation
+  // selector four) and the 37 that leave a mark when drawn alone (the Arabic and Syriac number signs, the Ogham space mark, the
+  // interlinear annotation anchors, the Kaithi number signs, the Egyptian and shorthand format controls). They are excluded where the
+  // class is used, so a name made of one is a name. The 28 members that only advance the line stay in the set.
+  const DRAWN_MARKS = String.raw`[\u180F\u{600}-\u{605}\u{6DD}\u{70F}\u{890}-\u{891}\u{8E2}\u{1680}\u{FFF9}-\u{FFFB}\u{110BD}\u{110CD}\u{13430}-\u{1343F}\u{1BCA0}-\u{1BCA3}]`;
+  const INVISIBLE_ONE = `(?:(?!${DRAWN_MARKS})${INVISIBLE_CHARS})`;
   const BLANK_TEXT = new RegExp(`^${INVISIBLE_ONE}*$`, "u");
   const BLANK_EDGES = new RegExp(`^${INVISIBLE_ONE}+|${INVISIBLE_ONE}+$`, "gu");
 
@@ -163,10 +167,6 @@
     return count === 1 ? "category" : "categories";
   }
 
-  // A whole number below this prints in full (JavaScript writes 1e21 and above in exponent form), so a
-  // whole-number total needs no rounding. Above 2^53 a double holds no fraction, so there is no noise to remove.
-  const WHOLE_TOTAL_PRINTS_IN_FULL = 1e21;
-
   /**
    * A total with float noise removed: twelve significant digits, unless it is
    * a whole number, which is written as it is. A total with twelve or
@@ -174,7 +174,10 @@
    * would overflow (a finite sum near the largest number) keeps the unrounded total.
    */
   function cleanTotal(total, places = 0) {
-    if (Number.isInteger(total) && Math.abs(total) < WHOLE_TOTAL_PRINTS_IN_FULL) {
+    // A whole-number total needs no rounding: formatValue prints every digit, and from 2^53 every
+    // double is a whole number, so there is no fraction or noise to remove. A total that reaches the
+    // next line is below 2^53, so its whole part never prints in exponent form.
+    if (Number.isInteger(total)) {
       return total;
     }
     const wholeDigits = String(Math.trunc(Math.abs(total))).length;
@@ -189,6 +192,27 @@
         : SIGNIFICANT_DIGITS;
     const rounded = Number(total.toPrecision(digits));
     return Number.isFinite(rounded) ? rounded : total;
+  }
+
+  /**
+   * The sum of a list of numbers, with Neumaier's compensation: the low part that each addition
+   * drops is kept and added back at the end, so a small value beside a huge one is not lost
+   * (1e16 + 1 + 1 gives 10000000000000002, not 1e16). A sum that is not finite is returned exactly
+   * as a plain sum gives it, so an overflow is still seen as one.
+   * @param {number[]} values - The numbers to add
+   * @returns {number} The sum
+   */
+  function compensatedSum(values) {
+    let sum = 0;
+    let compensation = 0;
+    for (const value of values) {
+      const next = sum + value;
+      // The low-order part that this addition rounded away, from whichever operand is larger.
+      compensation +=
+        Math.abs(sum) >= Math.abs(value) ? sum - next + value : value - next + sum;
+      sum = next;
+    }
+    return Number.isFinite(sum) ? sum + compensation : sum;
   }
 
   /** The most decimal places any segment value is written with. */
@@ -210,13 +234,48 @@
     return total > 0 && !hasNegativeValue(segments);
   }
 
+  // How close twice a scaled share must sit to an odd whole number to count as a half (the radar's
+  // tolerance: far below any difference two typed decimals make, far above one division's error).
+  const HALF_TOLERANCE = 1e-9;
+
+  /**
+   * A number rounded to a count of decimal places, halves away from zero (the radar's helper).
+   * @param {number} number - The number to round
+   * @param {number} places - Decimal places to keep
+   * @returns {number} The rounded number
+   */
+  function roundHalfAwayFromZero(number, places) {
+    const scale = 10 ** places;
+    const magnitude = Math.abs(number) * scale;
+    const twice = magnitude * 2;
+    const nearestTwice = Math.round(twice);
+    const isHalf =
+      Math.abs(twice - nearestTwice) < HALF_TOLERANCE && nearestTwice % 2 === 1;
+    const roundedMagnitude = isHalf ? (nearestTwice + 1) / 2 : Math.round(magnitude);
+    const rounded = (Math.sign(number) * roundedMagnitude) / scale;
+    return rounded === 0 ? 0 : rounded;
+  }
+
+  /**
+   * A value's share of the total, as a percentage to one decimal place, halves away from zero. Two
+   * whole numbers that a double holds exactly have an exact share, so it is worked out exactly;
+   * any other share uses the tolerance above.
+   */
+  function roundedShare(value, total) {
+    if (value >= 0 && total > 0 && Number.isSafeInteger(value) && Number.isSafeInteger(total)) {
+      const whole = BigInt(total);
+      return Number((BigInt(value) * 2000n + whole) / (2n * whole)) / 10;
+    }
+    return roundHalfAwayFromZero((value / total) * 100, 1);
+  }
+
   /**
    * A percentage as narration: one decimal place, except that a non-zero share
    * which would print as 0.0% reads "less than 0.1%".
    */
   function formatPercentage(value, total) {
-    const share = (value / total) * 100;
-    const text = share.toFixed(1);
+    // Halves round away from zero, as the radar's averages do: 86.1 of 168 is 51.25% and reads 51.3%.
+    const text = roundedShare(value, total).toFixed(1);
     if (value > 0 && text === "0.0") return BELOW_ONE_TENTH;
     return value < total && text === "100.0" ? ABOVE_99_9 : text + "%";
   }
@@ -227,7 +286,12 @@
    */
   function proportionPhrase(value, total) {
     const fraction = value / total;
-    const near = (target) => Math.abs(fraction - target) <= FRACTION_TOLERANCE;
+    // Two whole numbers that a double holds exactly carry no float noise, so their share is tested exactly.
+    const exact = Number.isSafeInteger(value) && Number.isSafeInteger(total);
+    const near = (target) =>
+      exact
+        ? value * Math.round(1 / target) === total
+        : Math.abs(fraction - target) <= FRACTION_TOLERANCE;
     // The share as the reader hears it. One that prints as a simple fraction
     // without being it reads "about", so "50.0%" never sits beside "over half".
     const printsAs = (target) =>
@@ -274,10 +338,19 @@
   // Digits a double carries reliably: two values equal at this many significant digits differ by float noise at most.
   const SAME_VALUE_DIGITS = 15;
 
-  /** True when the segments' values are one value to the digits a double carries, so "each" and "equal" are true. */
+  /**
+   * True when two values are one value, so "each" and "equal" are true of them. Two whole numbers
+   * carry no float noise, so they are one value only when they are equal. Any other pair is one
+   * value when it is equal to the digits a double carries.
+   */
+  function sameValue(a, b) {
+    if (Number.isInteger(a) && Number.isInteger(b)) return a === b;
+    return Number(a.toPrecision(SAME_VALUE_DIGITS)) === Number(b.toPrecision(SAME_VALUE_DIGITS));
+  }
+
+  /** True when the segments' values are one value, so "each" and "equal" are true. */
   function valuesAreSame(group) {
-    const key = (segment) => Number(segment.value.toPrecision(SAME_VALUE_DIGITS));
-    return group.every((segment) => key(segment) === key(group[0]));
+    return group.every((segment) => sameValue(segment.value, group[0].value));
   }
 
   /** "All four segments are equal" (two slices read "Both"); "about equal" when the values differ. */
@@ -316,12 +389,27 @@
   // whether the name repeats.
   const SEGMENT_NAMES = new WeakMap();
 
+  // Inside a name the invisible characters are removed for the repeat key, but not a space, which a reader sees as a gap.
+  // U+FEFF is white space to JavaScript and draws as nothing, so it is removed too.
+  const INVISIBLE_INSIDE = new RegExp(`\\uFEFF|(?!\\s)${INVISIBLE_ONE}`, "gu");
+
+  /**
+   * The key two names repeat on, so that names which look and sound the same are a repeat: the name is composed one way (NFC), the
+   * invisible characters at its ends and inside it are removed (white space inside is kept, so "New York" and "NewYork" stay two
+   * names), and a no-break space is read as a space. Case and lookalike letters are kept, so "North" and "NORTH" stay two names.
+   * @param {string} name - A segment, axis or series name
+   * @returns {string} The key
+   */
+  function repeatKey(name) {
+    return String(name).normalize("NFC").replace(NAME_EDGES, "").replace(INVISIBLE_INSIDE, "").replace(/\u00A0/g, " ");
+  }
+
   function registerSegmentNames(segments) {
     const counts = new Map();
     segments.forEach((segment) => {
       const name = String(segment.name);
       if (BLANK_NAME.test(name)) return;
-      const key = name.replace(NAME_EDGES, "");
+      const key = repeatKey(name);
       counts.set(key, (counts.get(key) || 0) + 1);
     });
     segments.forEach((segment, index) => {
@@ -331,7 +419,7 @@
         position: index + 1,
         unlabelled,
         // A blank name is never "repeated": it already reads "unlabelled segment N".
-        repeated: !unlabelled && counts.get(name.replace(NAME_EDGES, "")) > 1,
+        repeated: !unlabelled && counts.get(repeatKey(name)) > 1,
       });
     });
   }
@@ -362,6 +450,20 @@
   }
 
   /**
+   * The percentage runs of a group: one percentage (with " each" for a tie) when every member's
+   * share prints the same; otherwise each member's own share, in the order the group lists them,
+   * so no share is given that the member's own data row does not print.
+   */
+  function groupPercentages(group, total, each) {
+    const { text, term } = modelCore();
+    const shares = group.map((segment) => formatPercentage(segment.value, total));
+    if (shares.every((share) => share === shares[0])) {
+      return [term("percentage", [text(shares[0])]), ...each];
+    }
+    return joinRuns(shares.map((share) => [term("percentage", [text(share)])]));
+  }
+
+  /**
    * One Key Insights entry for the largest or the smallest group. A group of
    * one reads "Largest segment: X (v, p)"; a tie reads "Largest segments: X and
    * Y (v each, p each)".
@@ -383,8 +485,7 @@
         text(" ("),
         ...values,
         text(", "),
-        term("percentage", [text(formatPercentage(group[0].value, total))]),
-        ...each,
+        ...groupPercentages(group, total, each),
         text(")"),
       ],
       { role: kind }
@@ -500,7 +601,7 @@
 
     logDebug("Processed " + segments.length + " segments");
 
-    const total = segments.reduce((sum, segment) => sum + segment.value, 0);
+    const total = compensatedSum(segments.map((segment) => segment.value));
 
     // Finite values whose float sum overflows would give every segment a share of 0%. Refuse, as a thrown
     // error with a stable message, rather than describe a chart wrongly. (NaN and Infinity inputs are not this case.)
@@ -658,10 +759,7 @@
       // Calculate the combined percentage of the smallest segments (bottom half)
       const bottomHalfCount = Math.floor(segments.length / 2);
       const bottomHalf = segments.slice(segments.length - bottomHalfCount);
-      const bottomHalfTotal = bottomHalf.reduce(
-        (sum, segment) => sum + segment.value,
-        0
-      );
+      const bottomHalfTotal = compensatedSum(bottomHalf.map((segment) => segment.value));
       const bottomHalfPercentage = formatPercentage(bottomHalfTotal, total);
 
       logDebug(
