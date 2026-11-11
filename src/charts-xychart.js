@@ -152,6 +152,10 @@
     LEVEL_FALL: "mostly level, apart from a large fall",
     LEVEL_SPIKE: "mostly level, apart from a large spike",
     LEVEL_DIP: "mostly level, apart from a large dip",
+    LEVEL_RAISED: "mostly level, apart from a raised stretch",
+    LEVEL_RAISED_MANY: "mostly level, apart from raised stretches",
+    LEVEL_LOWERED: "mostly level, apart from a lowered stretch",
+    LEVEL_LOWERED_MANY: "mostly level, apart from lowered stretches",
     RISES: "rising",
     FALLS: "falling",
     UNKNOWN: "unknown",
@@ -177,6 +181,10 @@
     [TRENDS.LEVEL_FALL]: "is mostly level, apart from a large fall",
     [TRENDS.LEVEL_SPIKE]: "is mostly level, apart from a large spike",
     [TRENDS.LEVEL_DIP]: "is mostly level, apart from a large dip",
+    [TRENDS.LEVEL_RAISED]: "is mostly level, apart from a raised stretch",
+    [TRENDS.LEVEL_RAISED_MANY]: "is mostly level, apart from raised stretches",
+    [TRENDS.LEVEL_LOWERED]: "is mostly level, apart from a lowered stretch",
+    [TRENDS.LEVEL_LOWERED_MANY]: "is mostly level, apart from lowered stretches",
     [TRENDS.RISES]: "rises",
     [TRENDS.FALLS]: "falls",
   });
@@ -206,6 +214,10 @@
   // can hold in mind. This threshold is a judgement about listening, not a
   // measured value.
   const TIED_POSITION_COLLAPSE_AT = 4;
+  // Every mention of a value the code holds and the picture does not draw carries this note, word for word.
+  const UNDRAWN_NOTE = "written in the code, not drawn in the picture";
+  // Past this many undrawn values the sentence gives a count and not the values.
+  const UNDRAWN_LIST_MAX = 3;
 
   // Chart.js's inner guard for the cyclic and start-to-end sentences.
   const LINE_ADVANCED_MIN_POINTS = 4;
@@ -274,20 +286,49 @@
   const MAX_RESTORED_DECIMALS = 15;
   // A double carries 17 significant figures.
   const MAX_SIGNIFICANT_FIGURES = 17;
+  // A derived whole number is spoken to this many significant figures (a double's last two are rounding noise).
+  const SPOKEN_SIGNIFICANT_FIGURES = 15;
+  // ...from here up, where JavaScript itself stops writing digits and numberDigits pads the double's 17 figures with zeros.
+  const PADDED_DIGITS_FROM = 1e21;
+  // A mean that bands to 0 but is not 0 is spoken to this many significant figures.
+  const SMALL_MEAN_FIGURES = 2;
 
-  // Summing n decimals can be wrong by up to about n x this x the largest absolute value (0.1 + 0.2 - 0.3 is 5.5e-17). A mean closer to 0
-  // than that is rounding noise; two means closer to each other than that are the same average. The bound grows with the count and
-  // scales with the data, so it is 3.3e-3 at 1e13 and never swallows a real mean on integers.
+  // A typed decimal (0.1) is stored to within half a unit in the last place of its own size, so a mean of n of them is wrong by at most
+  // about this x the largest absolute value, whatever n is, once the sum itself is taken without loss (compensatedSum). A mean closer to 0
+  // than that is rounding noise; two means closer to each other than that are the same average. Whole numbers are stored exactly, so for
+  // them (while the sum stays below 2^53) the bound is 0 and a real mean is never swallowed.
   const FLOAT_ERROR_PER_VALUE = Number.EPSILON;
 
   /**
-   * The most that summing and averaging these values can be wrong by, from float error alone.
-   * @param {number} count - How many values were summed
-   * @param {number} largest - The largest absolute value
+   * The sum of a list of numbers, with Neumaier's compensation: the low part that each addition
+   * drops is kept and added back at the end, so a small value beside a huge one is not lost
+   * (1e16 + 1 + 1 gives 10000000000000002, not 1e16). A sum that is not finite is returned exactly
+   * as a plain sum gives it, so an overflow is still seen as one.
+   * @param {number[]} values - The numbers to add
+   * @returns {number} The sum
+   */
+  function compensatedSum(values) {
+    let sum = 0;
+    let compensation = 0;
+    for (const value of values) {
+      const next = sum + value;
+      // The low-order part that this addition rounded away, from whichever operand is larger.
+      compensation +=
+        Math.abs(sum) >= Math.abs(value) ? sum - next + value : value - next + sum;
+      sum = next;
+    }
+    return Number.isFinite(sum) ? sum + compensation : sum;
+  }
+
+  /**
+   * The most that the mean of these values can be wrong by, from float error alone.
+   * @param {Array<number>} values - The values that were averaged
    * @returns {number} The bound
    */
-  function floatNoiseBound(count, largest) {
-    return count * FLOAT_ERROR_PER_VALUE * largest;
+  function floatNoiseBound(values) {
+    const largest = values.reduce((most, value) => Math.max(most, Math.abs(value)), 0);
+    if (values.every(Number.isInteger) && largest * values.length <= Number.MAX_SAFE_INTEGER) return 0;
+    return FLOAT_ERROR_PER_VALUE * largest;
   }
 
   // A bare four-digit label is called a year only inside this span. A run such
@@ -624,14 +665,18 @@
       min: formatAuthorValueForTier(tier, min),
       max: formatAuthorValueForTier(tier, max),
     };
-    if (tier !== TIERS.SHORT || ends.min !== ends.max || min === max) {
+    // Two ends are also "the same" when one is rounded to a figure that equals the other (1 and about 1.00).
+    const figure = (text) => Number(text.replace(/^about /, ""));
+    if (tier !== TIERS.SHORT || min === max || (ends.min !== ends.max && figure(ends.min) !== figure(ends.max))) {
       return ends;
     }
     for (let decimals = SHORT_TIER_ROUNDING + 1; decimals <= MAX_RESTORED_DECIMALS; decimals += 1) {
       const lowText = dropTrailingZeros(min.toFixed(decimals));
       const highText = dropTrailingZeros(max.toFixed(decimals));
       if (lowText !== highText) {
-        return { min: `about ${lowText}`, max: `about ${highText}` };
+        // Where the two ends already read differently ("1" and "about 1.00"), an end the text reproduces exactly is not "about".
+        const spoken = (value, written) => (ends.min !== ends.max && Number(written) === value ? written : `about ${written}`);
+        return { min: spoken(min, lowText), max: spoken(max, highText) };
       }
     }
     return { min: numberDigits(min), max: numberDigits(max) };
@@ -646,7 +691,11 @@
    */
   function formatDerivedValue(value) {
     if (!Number.isFinite(value)) return String(value);
-    if (Number.isInteger(value)) return numberDigits(value);
+    // A whole-number statistic is spoken to 15 significant figures: the 16th and 17th of a double are rounding noise, and
+    // writing them out pads a number such as 3e22 as 29999999999999996000000.
+    if (Number.isInteger(value)) {
+      return numberDigits(Math.abs(value) >= PADDED_DIGITS_FROM ? Number(value.toPrecision(SPOKEN_SIGNIFICANT_FIGURES)) : value);
+    }
     const magnitude = Math.abs(value);
     const banded =
       magnitude >= 100
@@ -656,6 +705,16 @@
           : value.toFixed(2);
     const spoken = dropTrailingZeros(banded);
     return spoken === "-0" ? "0" : spoken;
+  }
+
+  /**
+   * `toFixed`, except that from 1e21 (where it would switch to exponent form) the number is written out in digits.
+   * @param {number} value - A number
+   * @param {number} decimals - Decimal places
+   * @returns {string} The number in digits
+   */
+  function fixedDigits(value, decimals) {
+    return Math.abs(value) >= PADDED_DIGITS_FROM ? numberDigits(value) : value.toFixed(decimals);
   }
 
   /**
@@ -702,22 +761,31 @@
     if (!Number.isFinite(mean) || !Number.isFinite(min) || !Number.isFinite(max)) {
       return banded;
     }
+    // The average of values that are all the same is that value, whatever the banded text would say.
+    if (min === max) return numberDigits(min);
     const strictlyInside = mean > min && mean < max;
     const inside = (text) => {
       const spoken = Number(text);
       if (strictlyInside && (spoken === min || spoken === max)) return false;
       return spoken >= min && spoken <= max;
     };
-    if (inside(banded)) return banded;
+    if (inside(banded)) {
+      // A mean that is not zero is never spoken as 0 (the range holds 0, so the search below would stop at it): add decimals until a figure shows.
+      if (mean !== 0 && Number(banded) === 0) {
+        const small = numberDigits(Number(mean.toPrecision(SMALL_MEAN_FIGURES)));
+        return inside(small) ? small : banded;
+      }
+      return banded;
+    }
     for (let decimals = 0; decimals <= MAX_RESTORED_DECIMALS; decimals += 1) {
-      const restored = dropTrailingZeros(mean.toFixed(decimals));
+      const restored = dropTrailingZeros(fixedDigits(mean, decimals));
       if (inside(restored)) return restored;
     }
     // No figure up to 15 decimals is strictly inside (a range narrower than 1e-15, or a mean needing more digits): use the fewest
     // significant figures that are, written as the range ends are.
     let atAnEnd = null;
     for (let decimals = 0; decimals <= MAX_RESTORED_DECIMALS; decimals += 1) {
-      const restored = dropTrailingZeros(mean.toFixed(decimals));
+      const restored = dropTrailingZeros(fixedDigits(mean, decimals));
       if (Number(restored) >= min && Number(restored) <= max) atAnEnd = restored;
     }
     // Only when the mean really is between the ends: an all-equal series (mean = both ends, off by float noise) keeps its banded text.
@@ -725,7 +793,9 @@
       const spoken = numberDigits(Number(mean.toPrecision(figures)));
       if (inside(spoken)) return spoken;
     }
-    return atAnEnd !== null ? atAnEnd : banded;
+    // The mean equals an end in doubles and no shorter figure fits between the ends: speak it in full rather than a rounded figure outside the range.
+    // (An all-equal series keeps its banded text, as the comment above says.)
+    return atAnEnd !== null ? atAnEnd : min === max ? banded : numberDigits(mean);
   }
 
   /**
@@ -784,10 +854,10 @@
   function computeStatistics(values) {
     const count = values.length;
     if (count === 0) throw new Error("xychart: a series has no values");
-    const total = values.reduce((sum, value) => sum + value, 0);
+    const total = compensatedSum(values);
     const rawMean = count > 0 ? total / count : 0;
     const largest = values.reduce((most, value) => Math.max(most, Math.abs(value)), 0);
-    const mean = Math.abs(rawMean) <= floatNoiseBound(count, largest) ? 0 : rawMean;
+    const mean = Math.abs(rawMean) <= floatNoiseBound(values) ? 0 : rawMean;
 
     let maxIndex = 0;
     let minIndex = 0;
@@ -808,12 +878,12 @@
       if (values[i] === values[minIndex]) minIndices.push(i);
     }
 
-    const variance =
-      count > 0
-        ? values.reduce(
-            (sum, value) => sum + (value - mean) * (value - mean),
-            0
-          ) / count
+    // The spread is worked out on values divided by the largest, so squaring can neither overflow (1e155 squared) nor underflow (1e-200
+    // squared), then scaled back.
+    const scaledMean = largest > 0 ? mean / largest : 0;
+    const scaledVariance =
+      largest > 0
+        ? compensatedSum(values.map((value) => (value / largest - scaledMean) ** 2)) / count
         : 0;
 
     const sorted = values.slice().sort((a, b) => a - b);
@@ -834,7 +904,7 @@
       minIndex: minIndex,
       maxIndices: maxIndices,
       minIndices: minIndices,
-      standardDeviation: Math.sqrt(variance),
+      standardDeviation: largest * Math.sqrt(scaledVariance),
       median: median,
     };
   }
@@ -872,6 +942,44 @@
   const CONSISTENT_END_SHARE = 0.25;
   // A spike or a dip is held by this share of the points or fewer, in ONE stretch. A plateau or two spikes is not "a large spike".
   const LEVEL_SPIKE_MAX_POINT_SHARE = 0.25;
+  // "Consistently" is not said when the single biggest step against the direction is more than this share of the range: a climb of
+  // 100 that gives back 70 in one step is not consistent.
+  const CONSISTENT_STEP_AGAINST_SHARE = 0.25;
+
+  /**
+   * How many separate stretches of points the test holds for.
+   * @param {Array<number>} values - The series values in source order
+   * @param {Function} onFarSide - Takes a value, true when it counts
+   * @returns {number} The number of unbroken stretches
+   */
+  function countStretches(values, onFarSide) {
+    let stretches = 0;
+    let previous = false;
+    for (const value of values) {
+      const current = onFarSide(value);
+      if (current && !previous) stretches += 1;
+      previous = current;
+    }
+    return stretches;
+  }
+
+  /**
+   * The words for a mostly level series with a large range where no single spike or dip fits: the side with fewer
+   * points is the one that stands apart.
+   * @param {Array<number>} values - The series values in source order
+   * @param {number} high - The highest value
+   * @param {number} low - The lowest value
+   * @returns {string} A TRENDS member
+   */
+  function levelFallbackTrend(values, high, low) {
+    const midpoint = (high + low) / 2;
+    const above = (value) => value > midpoint;
+    const below = (value) => value < midpoint;
+    const raised = values.filter(above).length <= values.filter(below).length;
+    const stretches = countStretches(values, raised ? above : below);
+    if (raised) return stretches === 1 ? TRENDS.LEVEL_RAISED : TRENDS.LEVEL_RAISED_MANY;
+    return stretches === 1 ? TRENDS.LEVEL_LOWERED : TRENDS.LEVEL_LOWERED_MANY;
+  }
 
   /**
    * True when the points for which `onFarSide` holds are few and form one unbroken stretch.
@@ -932,11 +1040,17 @@
     let positive = 0;
     let negative = 0;
     let unchanged = 0;
+    let biggestRise = 0;
+    let biggestFall = 0;
     for (let i = 1; i < values.length; i += 1) {
       const difference = values[i] - values[i - 1];
-      if (difference > 0) positive += 1;
-      else if (difference < 0) negative += 1;
-      else unchanged += 1;
+      if (difference > 0) {
+        positive += 1;
+        biggestRise = Math.max(biggestRise, difference);
+      } else if (difference < 0) {
+        negative += 1;
+        biggestFall = Math.max(biggestFall, -difference);
+      } else unchanged += 1;
     }
 
     // "Consistently" is only said when the series also ends on the side that
@@ -954,8 +1068,9 @@
     const reach = CONSISTENT_END_SHARE * (high - low);
     const first = values[0];
     const last = values[values.length - 1];
-    if (positive > TREND_DOMINANCE * steps && overall > 0 && high - last <= reach && first - low <= reach) return TRENDS.UP;
-    if (negative > TREND_DOMINANCE * steps && overall < 0 && last - low <= reach && high - first <= reach) return TRENDS.DOWN;
+    const stepLimit = CONSISTENT_STEP_AGAINST_SHARE * (high - low);
+    if (positive > TREND_DOMINANCE * steps && overall > 0 && high - last <= reach && first - low <= reach && biggestFall <= stepLimit) return TRENDS.UP;
+    if (negative > TREND_DOMINANCE * steps && overall < 0 && last - low <= reach && high - first <= reach && biggestRise <= stepLimit) return TRENDS.DOWN;
     if (unchanged > TREND_DOMINANCE * steps) {
       // Mostly flat steps, but the series ends far from where it began, so it is not "stable".
       const range = Math.max(...values) - Math.min(...values);
@@ -968,6 +1083,8 @@
         const midpoint = (high + low) / 2;
         if (Math.max(...values) - Math.max(...ends) > LEVEL_SPIKE_STICK_OUT * range && isOneShortStretch(values, (value) => value > midpoint)) return TRENDS.LEVEL_SPIKE;
         if (Math.min(...ends) - Math.min(...values) > LEVEL_SPIKE_STICK_OUT * range && isOneShortStretch(values, (value) => value < midpoint)) return TRENDS.LEVEL_DIP;
+        // A large range that no spike or dip explains is not "stable".
+        return levelFallbackTrend(values, high, low);
       }
       return TRENDS.STABLE;
     }
@@ -1249,19 +1366,37 @@
   // grapheme joiner, the Hangul fillers, the braille blank U+2800 and the variation selectors. One class serves every name and every
   // label, so nothing is blank in one place and visible in another.
   const INVISIBLE_CHARS = String.raw`\s\p{Cf}\p{Default_Ignorable_Code_Point}\u2800`;
-  // The one default-ignorable code point that Chromium draws or advances (Mongolian free variation selector four) is not blank.
-  const DRAWN_IGNORABLE = String.raw`\u180F`;
-  const INVISIBLE_ONE = `(?:(?!${DRAWN_IGNORABLE})[${INVISIBLE_CHARS}])`;
+  // Characters in the invisible set that Chromium nonetheless draws as ink: U+180F (Mongolian free variation
+  // selector four) and the 37 that leave a mark when drawn alone (the Arabic and Syriac number signs, the Ogham space mark, the
+  // interlinear annotation anchors, the Kaithi number signs, the Egyptian and shorthand format controls). They are excluded where the
+  // class is used, so a name made of one is a name. The 28 members that only advance the line stay in the set.
+  const DRAWN_MARKS = String.raw`[\u180F\u{600}-\u{605}\u{6DD}\u{70F}\u{890}-\u{891}\u{8E2}\u{1680}\u{FFF9}-\u{FFFB}\u{110BD}\u{110CD}\u{13430}-\u{1343F}\u{1BCA0}-\u{1BCA3}]`;
+  const INVISIBLE_ONE = `(?:(?!${DRAWN_MARKS})[${INVISIBLE_CHARS}])`;
 
   // A label is blank when it holds only invisible characters.
   const BLANK_LABEL = new RegExp(`^${INVISIBLE_ONE}*$`, "u");
-  // A series name compared by what it sounds like: edge white space and format characters are dropped.
+  // A series name compared by the repeat key (see repeatKey): what looks and sounds the same is one name.
   function seriesNameKey(series) {
-    return typeof series.name === "string" ? series.name.replace(LABEL_EDGES, "") : "";
+    return typeof series.name === "string" ? repeatKey(series.name) : "";
   }
 
   // White space and format characters at either end of a label do not change how it sounds or looks.
   const LABEL_EDGES = new RegExp(`^${INVISIBLE_ONE}+|${INVISIBLE_ONE}+$`, "gu");
+
+  // Inside a name the invisible characters are removed for the repeat key, but not a space, which a reader sees as a gap.
+  // U+FEFF is white space to JavaScript and draws as nothing, so it is removed too.
+  const INVISIBLE_INSIDE = new RegExp(`\\uFEFF|(?!\\s)${INVISIBLE_ONE}`, "gu");
+
+  /**
+   * The key two names repeat on, so that names which look and sound the same are a repeat: the name is composed one way (NFC), the
+   * invisible characters at its ends and inside it are removed (white space inside is kept, so "New York" and "NewYork" stay two
+   * names), and a no-break space is read as a space. Case and lookalike letters are kept, so "North" and "NORTH" stay two names.
+   * @param {string} name - A segment, axis or series name
+   * @returns {string} The key
+   */
+  function repeatKey(name) {
+    return String(name).normalize("NFC").replace(LABEL_EDGES, "").replace(INVISIBLE_INSIDE, "").replace(/\u00A0/g, " ");
+  }
 
   /**
    * True when the label at this index appears more than once on the axis, so a
@@ -1451,6 +1586,24 @@
    * @returns {Array<Object>} Runs
    */
   function pointReferencesRuns(chart, indices, style) {
+    const { text } = modelCore();
+    const runs = pointReferencesCore(chart, indices, style);
+    if (!indices.some((i) => isUndrawnIndex(chart, i))) return runs;
+    // A position past the last label is in the code and not in the picture: say so, in the shape each context takes.
+    return [...runs, text(style === REFERENCE_STYLE.PARENTHETICAL ? `, ${UNDRAWN_NOTE}` : ` (${UNDRAWN_NOTE})`)];
+  }
+
+  /**
+   * True when a value sits past the last declared label: Mermaid draws nothing there.
+   * @param {Object} chart - The adapter's chart
+   * @param {number} index - 0-based position
+   * @returns {boolean} Whether the position is past the labels
+   */
+  function isUndrawnIndex(chart, index) {
+    return hasDeclaredCategories(chart) && index >= declaredCategories(chart).length;
+  }
+
+  function pointReferencesCore(chart, indices, style) {
     const { text } = modelCore();
     if (indices.length === 1) {
       return referenceRuns(pointReferencePartRuns(chart, indices[0]), style);
@@ -1752,7 +1905,7 @@
       // whether they differ from the declaration. Series that agree with each
       // other are comparable, and the mismatch sentence in the construction
       // paragraph supplies the denominator.
-      const lengths = series.map((one) => one.values.length);
+      const lengths = series.map((one) => valueCount(one));
       if (new Set(lengths).size > 1) {
         // The SHORT tier takes the fixed sentence and drops the list of series,
         // because that list has no length limit. It grows with the number of
@@ -1771,7 +1924,7 @@
         }
         const clauses = series.map((one) => [
           ...seriesLabelRuns(one, series),
-          text(` has ${countWord(one.values.length)}`),
+          text(` has ${countWord(valueCount(one))}`),
         ]);
         return [
           text("The chart's series have different numbers of values: "),
@@ -1785,7 +1938,7 @@
       const means = series.map((one) => computeStatistics(one.values).mean);
       const highestMean = Math.max(...means);
       const highestAt = means.indexOf(highestMean);
-      const bounds = series.map((one) => floatNoiseBound(one.values.length, Math.max(...one.values.map((value) => Math.abs(value)))));
+      const bounds = series.map((one) => floatNoiseBound(one.values));
       const sameMean = (i) => Math.abs(means[i] - highestMean) <= bounds[i] + bounds[highestAt];
       const leaders = series.filter((one, i) => sameMean(i));
       // A mean that is not a number (outside the stated input) names the first series, as before.
@@ -1867,10 +2020,13 @@
       // UNKNOWN only below two values, and a series of nought or one value never
       // reaches this line. One value is degenerate and returned above, and an
       // empty series is caught by the zero-mean guard.
+      // The unclear trend is a verb in TREND_CLAUSE ("fluctuates with no clear trend"), so it takes no "is":
+      // one form of the phrase, as in the zigzag sentence.
+      const trendPhrase = trend === TRENDS.NONE ? TREND_CLAUSE[trend] : `is ${trend}`;
       return [
         ...capitaliseRuns(seriesLabelRuns(only, series)),
         text(
-          ` is ${trend}, with values between ${ends.min} and ${ends.max}.`
+          ` ${trendPhrase}, with values between ${ends.min} and ${ends.max}.`
         ),
       ];
     }
@@ -2385,9 +2541,9 @@
    * @param {Object} chart - The adapter's chart
    * @returns {Object} One list block (model list), never empty
    */
-  function buildInsightsModel(chart) {
+  function buildInsightsModel(chart, wholeChart = chart) {
     const { list, item, strong } = modelCore();
-    const items = [item([strong(buildTakeawayRuns(chart, TIERS.DETAILED))])];
+    const items = [item([strong(buildTakeawayRuns(chart, TIERS.DETAILED))]), ...undrawnValueItems(wholeChart)];
     const isRangeAxis = !chart.xAxis || chart.xAxis.kind === AXIS_KINDS.RANGE;
 
     if (chart.series.length === 1) {
@@ -2753,12 +2909,63 @@
         // tell an empty cell from a recorded zero.
         // A cell value is the describer's own formatting, never escaped
         // (formatAuthorValue is String(value)).
-        return [text(value === undefined ? NO_VALUE_TEXT : formatAuthorValue(value))];
+        if (value === undefined) return [text(NO_VALUE_TEXT)];
+        return [text(isUndrawnIndex(chart, i) ? `${formatAuthorValue(value)} (${UNDRAWN_NOTE})` : formatAuthorValue(value))];
       });
       tableRows.push({ header: rowLabel, cells });
     }
 
     return table({ caption, columns: [xHeader, ...valueHeaders], rows: tableRows });
+  }
+
+  /**
+   * The chart cut back to what the picture draws: a series with more values than the x-axis has labels keeps the first ones,
+   * and remembers how many it held.
+   * @param {Object} chart - The adapter's chart
+   * @returns {Object} The chart, or a copy with the undrawn values left off
+   */
+  function drawnOnly(chart) {
+    if (!hasDeclaredCategories(chart)) return chart;
+    const declared = declaredCategories(chart).length;
+    if (!chart.series.some((one) => one.values.length > declared)) return chart;
+    return {
+      ...chart,
+      series: chart.series.map((one) =>
+        one.values.length > declared ? { ...one, values: one.values.slice(0, declared), totalValues: one.values.length } : one
+      ),
+    };
+  }
+
+  /**
+   * How many values a series holds in the code, drawn or not.
+   * @param {Object} series - One adapter series
+   * @returns {number} The count
+   */
+  function valueCount(series) {
+    return series.totalValues === undefined ? series.values.length : series.totalValues;
+  }
+
+  /**
+   * One insight per series that holds values past the last label: it names them, with the disclosure.
+   * @param {Object} chart - The adapter's chart, whole
+   * @returns {Array<Object>} List items
+   */
+  function undrawnValueItems(chart) {
+    if (!hasDeclaredCategories(chart)) return [];
+    const { text, item } = modelCore();
+    const declared = declaredCategories(chart).length;
+    return chart.series
+      .filter((one) => one.values.length > declared)
+      .map((one) => {
+        const past = one.values.slice(declared);
+        const count = countWord(past.length);
+        const named =
+          past.length <= UNDRAWN_LIST_MAX
+            ? `${count} ${past.length === 1 ? "value" : "values"} past the last label: ${past.map(formatAuthorValue).join(", ").replace(/, ([^,]*)$/, " and $1")}`
+            : `${count} values past the last label`;
+        const label = seriesLabelRuns(one, chart.series);
+        return item([...capitaliseRuns(label), text(` also holds ${named} (${UNDRAWN_NOTE}).`)]);
+      });
   }
 
   /**
@@ -2795,18 +3002,20 @@
   function buildXychartModel(givenChart, options) {
     const { text, section, description } = modelCore();
     const chart = withoutBlankText(givenChart);
+    // The figures (range, average, trend, highest and lowest) cover the drawn values only.
+    const figures = drawnOnly(chart);
 
     const shortRuns = [
       ...buildShortOpeningRuns(chart, options),
       text(" "),
-      ...buildTakeawayRuns(chart, TIERS.SHORT),
+      ...buildTakeawayRuns(figures, TIERS.SHORT),
     ];
 
     const sections = [
       section(buildConstructionBlocks(chart, options), {
         heading: [text("Chart Construction")],
       }),
-      section([buildInsightsModel(chart)], { heading: [text("Key Insights")] }),
+      section([buildInsightsModel(figures, chart)], { heading: [text("Key Insights")] }),
       section([buildTableModel(chart)], { heading: [text("Data Table")] }),
     ];
 
