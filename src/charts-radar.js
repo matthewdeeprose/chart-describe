@@ -148,6 +148,9 @@
   // The most pairs that the Comparison lists before its closing item.
   const MAX_LISTED_PAIRS = 6;
 
+  // The most tied axes the highest and lowest sentence lists by name; a larger tie reads as a count.
+  const TIE_AXES_CAP = 5;
+
   // The names that the describer uses for an empty or whitespace-only label.
   const UNLABELLED_AXIS = "unlabelled axis";
   const UNLABELLED_SERIES = "unlabelled series";
@@ -285,8 +288,12 @@
   // Chromium draws or advances them, and U+180F is excluded by lookahead below. ONE
   // class serves every name and every title, so no name is blank in one place and visible in another.
   const INVISIBLE_CHARS = String.raw`\s\p{Cf}\p{Default_Ignorable_Code_Point}\u2800`;
-  // Mongolian free variation selector four is Default_Ignorable but Chromium draws it, so it is not blank.
-  const INVISIBLE_ONE = `(?:(?!\\u180F)[${INVISIBLE_CHARS}])`;
+  // Characters in the invisible set that Chromium nonetheless draws as ink: U+180F (Mongolian free variation
+  // selector four) and the 37 that leave a mark when drawn alone (the Arabic and Syriac number signs, the Ogham space mark, the
+  // interlinear annotation anchors, the Kaithi number signs, the Egyptian and shorthand format controls). They are excluded where the
+  // class is used, so a name made of one is a name. The 28 members that only advance the line stay in the set.
+  const DRAWN_MARKS = String.raw`[\u180F\u{600}-\u{605}\u{6DD}\u{70F}\u{890}-\u{891}\u{8E2}\u{1680}\u{FFF9}-\u{FFFB}\u{110BD}\u{110CD}\u{13430}-\u{1343F}\u{1BCA0}-\u{1BCA3}]`;
+  const INVISIBLE_ONE = `(?:(?!${DRAWN_MARKS})[${INVISIBLE_CHARS}])`;
 
   /** A label or title with nothing visible in it. */
   const BLANK_LABEL = new RegExp(`^${INVISIBLE_ONE}*$`, "u");
@@ -357,17 +364,19 @@
   /** Characters that draw as nothing, at either end of a label. */
   const LABEL_EDGES = new RegExp(`^${INVISIBLE_ONE}+|${INVISIBLE_ONE}+$`, "gu");
 
+  // Inside a name the invisible characters are removed for the repeat key, but not a space, which a reader sees as a gap.
+  // U+FEFF is white space to JavaScript and draws as nothing, so it is removed too.
+  const INVISIBLE_INSIDE = new RegExp(`\\uFEFF|(?!\\s)${INVISIBLE_ONE}`, "gu");
+
   /**
-   * The key two labels are compared by. White space and format characters at
-   * either end change neither how a label sounds nor how it looks, so
-   * "Quality " beside "Quality" is a repeat. Case still differs, and
-   * characters inside the label are kept.
-   *
-   * @param {string} label - An axis label
-   * @returns {string} The label with both ends stripped
+   * The key two names repeat on, so that names which look and sound the same are a repeat: the name is composed one way (NFC), the
+   * invisible characters at its ends and inside it are removed (white space inside is kept, so "New York" and "NewYork" stay two
+   * names), and a no-break space is read as a space. Case and lookalike letters are kept, so "North" and "NORTH" stay two names.
+   * @param {string} name - A segment, axis or series name
+   * @returns {string} The key
    */
-  function repeatKey(label) {
-    return String(label).replace(LABEL_EDGES, "");
+  function repeatKey(name) {
+    return String(name).normalize("NFC").replace(LABEL_EDGES, "").replace(INVISIBLE_INSIDE, "").replace(/\u00A0/g, " ");
   }
 
   /**
@@ -755,6 +764,27 @@
   }
 
   /**
+   * The sum of a list of numbers, with Neumaier's compensation: the low part that each addition
+   * drops is kept and added back at the end, so a small value beside a huge one is not lost
+   * (1e16 + 1 + 1 gives 10000000000000002, not 1e16). A sum that is not finite is returned exactly
+   * as a plain sum gives it, so an overflow is still seen as one.
+   * @param {number[]} values - The numbers to add
+   * @returns {number} The sum
+   */
+  function compensatedSum(values) {
+    let sum = 0;
+    let compensation = 0;
+    for (const value of values) {
+      const next = sum + value;
+      // The low-order part that this addition rounded away, from whichever operand is larger.
+      compensation +=
+        Math.abs(sum) >= Math.abs(value) ? sum - next + value : value - next + sum;
+      sum = next;
+    }
+    return Number.isFinite(sum) ? sum + compensation : sum;
+  }
+
+  /**
    * The mean of the values. Finite values can still sum past the largest number, and then the
    * mean would read Infinity, so such a series is refused with a RangeError, as the pie refuses a
    * total that overflows. (Dividing each value first was tried: it gives 1.6499999999999999e308 for
@@ -765,7 +795,7 @@
    * @returns {number} The mean
    */
   function meanOf(values) {
-    const sum = values.reduce((total, value) => total + value, 0);
+    const sum = compensatedSum(values);
     if (!Number.isFinite(sum) && values.every(Number.isFinite)) {
       throw new RangeError(RADAR_TOTAL_OVERFLOW);
     }
@@ -801,9 +831,11 @@
       rounded = roundHalfAwayFromZero(mean, places);
       if (rounded < lowest || rounded > highest) continue;
       if (firstInside === null) firstInside = rounded;
+      // The mean of values that differ lies strictly between the lowest and the highest, so a figure
+      // ON one of them is never exact, whatever the scale. A tolerance would let such a figure
+      // stand when it was close to the mean, and close grows with the mean. An all-equal series never gets here as an extreme.
       const onExtreme = lowest !== highest && (rounded === lowest || rounded === highest);
-      const exact = Math.abs(rounded - mean) <= HALF_TOLERANCE * Math.max(1, Math.abs(mean));
-      if (!onExtreme || exact) return { figure: rounded, approximate: false };
+      if (!onExtreme) return { figure: rounded, approximate: false };
     }
     if (firstInside !== null) return { figure: firstInside, approximate: true };
 
@@ -860,8 +892,9 @@
    * The highest and lowest sentence of a series. THIS IS THE ONLY PLACE THAT
    * FINDS THE EXTREMES.
    *
-   * A tie lists every tied axis, in axis order, joined in the way that the
-   * axes sentence joins them. When two axes share a label, the sentence names
+   * A tie of up to TIE_AXES_CAP axes lists every tied axis, in axis order, joined in the way that
+   * the axes sentence joins them; a larger tie reads as a count, "Highest on 19 axes", with the
+   * count in the describer's number form. When two axes share a label, the sentence names
    * the label once for each axis that carries it. When every value is equal,
    * it reads "The same value on every axis." A chart with one axis has no such
    * sentence at all, and never reaches this function.
@@ -876,12 +909,14 @@
     const lowest = Math.min(...values);
     if (highest === lowest) return [text("The same value on every axis.")];
 
-    const on = (target) =>
-      joinRunsNoSerial(
-        axes
-          .map((axis, index) => (values[index] === target ? axisName(axes, index) : null))
-          .filter((name) => name !== null)
-      );
+    // A tie of more than TIE_AXES_CAP axes is given as a count ("Highest on 19 axes"); the nested
+    // list under the series still names every axis with its value, so nothing is lost.
+    const on = (target) => {
+      const names = axes
+        .map((axis, index) => (values[index] === target ? axisName(axes, index) : null))
+        .filter((name) => name !== null);
+      return names.length > TIE_AXES_CAP ? [text(axesPhrase(names.length))] : joinRunsNoSerial(names);
+    };
     return [text("Highest on "), ...on(highest), text(", lowest on "), ...on(lowest), text(".")];
   }
 

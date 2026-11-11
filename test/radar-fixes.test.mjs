@@ -4,8 +4,9 @@
 //    two, and so on, and the first result inside the values is used. Equal values follow the same rule.
 //    Each of these tests builds a one-series chart and checks the exact series line.
 // 2. An axis whose label is shared with another axis is named with its position, "(axis 2)", in the
-//    sentences and in the data table. Labels are compared with white space and invisible format
-//    characters stripped from both ends; case and characters inside the label still count.
+//    sentences and in the data table. Labels are compared in composed form (NFC), with a no-break space
+//    read as a space, white space and invisible characters stripped from both ends, and invisible
+//    characters other than white space removed from inside; case and visible characters still count.
 // 3. An axis label with nothing visible in it (empty, white space, or only format characters such as a
 //    zero-width space) reads "unlabelled axis N".
 // 4. A comparison with a higher, a lower and an equal part joins them with one "and", before the last.
@@ -519,4 +520,114 @@ test("the C0 and C1 controls and U+180F draw in Chromium, so a label or title of
     assert.ok(!axesSentence(text.lines).includes("unlabelled axis 1"), shown);
     assert.ok(text.short.includes("titled"), shown);
   }
+});
+
+// The average adds with a compensated sum and never calls a figure on an extreme exact; labels that look and
+// sound the same are a repeat; a tie of more than five axes reads as a count.
+const averageOf = (values) => /averaging ([^.]*(?:\.\d+)?)\./.exec(seriesLine(values))[1];
+
+test("a huge pair that cancels does not drop the small values from the average", () => {
+  // exact mean 14 / 5 = 2.8; a plain running sum loses the 6 beside 1e252 and gives 8 / 5
+  assert.equal(seriesLine([1e252, 6, -1e252, 4, 4]), '1. "S", averaging 3. Highest on "Axis1", lowest on "Axis3".');
+  assert.equal(averageOf([1e17, 1, 1, 1, 1, -1e17]), "1");
+});
+
+test("the order of the values does not change the average", () => {
+  assert.equal(averageOf([5, 1e308, -1e308]), "2");
+  assert.equal(averageOf([1e308, -1e308, 5]), "2");
+});
+
+test("the compensated sum leaves ordinary averages as they were", () => {
+  assert.equal(averageOf([1, 2]), "1.5");
+  assert.equal(seriesLine([4, 4, 4]), '1. "S", averaging 4. The same value on every axis.');
+  assert.equal(averageOf([0.1, 0.2, -0.3]), "0");
+  assert.equal(averageOf([0.1, 4.1, 3.3]), "3");
+});
+
+test("a figure on the highest or lowest value is never called exact, at any scale", () => {
+  // mean 100000000.15: 100000000.1 is the lowest value, so one more place is given
+  assert.equal(
+    seriesLine([100000000.1, 100000000.2, 100000000.1, 100000000.2]),
+    '1. "S", averaging 100000000.15. Highest on "Axis2" and "Axis4", lowest on "Axis1" and "Axis3".'
+  );
+  // mean 1000000000.4375: the whole number 1000000000 is the lowest value
+  assert.equal(averageOf([1e9, 1e9 + 1, 1e9 + 0.5, 1e9 + 0.25, 1e9 + 0.75, 1e9 + 0.125]), "1000000000.4");
+});
+
+test("labels that look and sound the same are a repeat: composed form, a no-break space, invisible characters inside", () => {
+  for (const [first, second] of [
+    ["Caf\u00E9", "Cafe\u0301"],
+    ["North", "No\u200Brth"],
+    ["New York", "New\u00A0York"],
+    ["North", "Nor\u00ADth"],
+    ["North", "Nor\u034Fth"],
+  ]) {
+    const text = radarText({ axisLabels: [first, second, "Z"], seriesList: [["S", [1, 2, 3]]] });
+    const shown = JSON.stringify([first, second]);
+    assert.ok(axesSentence(text.lines).includes(`"${first}" (axis 1), "${second}" (axis 2)`), shown);
+  }
+  const series = radarText({ axisLabels: THREE, seriesList: [["Caf\u00E9", [1, 2, 3]], ["Cafe\u0301", [3, 2, 1]]] });
+  assert.ok(seriesLines(series.lines)[0].startsWith('1. "Caf\u00E9" (series 1), '), seriesLines(series.lines)[0]);
+});
+
+test("labels that differ to the eye stay two names: case, white space inside, another script, full-width letters", () => {
+  for (const [first, second] of [
+    ["North", "NORTH"],
+    ["New York", "NewYork"],
+    ["North", "N\u043Erth"],
+    ["North", "\uFF2Eorth"],
+  ]) {
+    const text = radarText({ axisLabels: [first, second, "Z"], seriesList: [["S", [1, 2, 3]]] });
+    assert.ok(!axesSentence(text.lines).includes("(axis"), JSON.stringify([first, second]));
+  }
+});
+
+test("a tie of more than five axes reads as a count; five or fewer stay a list", () => {
+  const twenty = radarText({ axisLabels: manyAxes(20), seriesList: [["S", onesWithOneZero(20)]] });
+  assert.equal(seriesLines(twenty.lines)[0], '1. "S", averaging 0.95. Highest on 19 axes, lowest on "X1".');
+  const six = radarText({ axisLabels: manyAxes(7), seriesList: [["S", onesWithOneZero(7)]] });
+  assert.equal(seriesLines(six.lines)[0], '1. "S", averaging 0.9. Highest on six axes, lowest on "X1".');
+  const lowSix = radarText({ axisLabels: manyAxes(7), seriesList: [["S", [1, 0, 0, 0, 0, 0, 0]]] });
+  assert.equal(seriesLines(lowSix.lines)[0], '1. "S", averaging 0.1. Highest on "X1", lowest on six axes.');
+  const five = radarText({ axisLabels: manyAxes(6), seriesList: [["S", onesWithOneZero(6)]] });
+  assert.equal(seriesLines(five.lines)[0], '1. "S", averaging 0.8. Highest on "X2", "X3", "X4", "X5" and "X6", lowest on "X1".');
+});
+
+// ---- The marks Chromium draws are names, U+FEFF in the repeat key, and the one compensated sum ----
+
+const DRAWN_MARK_RANGES = [[0x600, 0x605], [0x6dd, 0x6dd], [0x70f, 0x70f], [0x890, 0x891], [0x8e2, 0x8e2], [0x1680, 0x1680], [0xfff9, 0xfffb], [0x110bd, 0x110bd], [0x110cd, 0x110cd], [0x13430, 0x1343f], [0x1bca0, 0x1bca3]];
+const DRAWN_MARKS_ALL = DRAWN_MARK_RANGES.flatMap(([from, to]) => Array.from({ length: to - from + 1 }, (_, i) => String.fromCodePoint(from + i)));
+
+test("a label or title made of one of the 37 drawn marks is a name; the members that only advance stay blank", () => {
+  assert.equal(DRAWN_MARKS_ALL.length, 37);
+  for (const mark of DRAWN_MARKS_ALL) {
+    const shown = "U+" + mark.codePointAt(0).toString(16);
+    const text = radarText({ title: mark, axisLabels: [mark, "B", "C"], seriesList: [["S", [1, 2, 3]]] });
+    assert.ok(text.short.includes("titled"), shown);
+    assert.ok(axesSentence(text.lines).includes(`"${mark}"`), shown);
+    assert.ok(!axesSentence(text.lines).includes("unlabelled axis 1"), shown);
+  }
+  for (const blank of ["\u200B", "\u034F", "\u17B4", "\u2800", "\uFEFF", "\u00AD"]) {
+    const shown = "U+" + blank.codePointAt(0).toString(16);
+    const text = radarText({ title: blank, axisLabels: [blank, "B", "C"], seriesList: [["S", [1, 2, 3]]] });
+    assert.ok(axesSentence(text.lines).includes("unlabelled axis 1"), shown);
+    assert.equal(text.short, "A radar chart with three axes and one series.", shown);
+  }
+});
+
+test("the repeat key removes an interior U+FEFF, as the pie's does, and keeps different names apart", () => {
+  const repeated = (a, b) => {
+    const sentence = axesSentence(radarText({ axisLabels: [a, b, "C"], seriesList: [["S", [1, 2, 3]]] }).lines);
+    return sentence.includes("(axis 1)") && sentence.includes("(axis 2)");
+  };
+  assert.ok(repeated("North", "No\uFEFFrth"));
+  assert.ok(repeated("Caf\u00E9", "Cafe\u0301"));
+  assert.ok(!repeated("North", "NORTH"));
+  assert.ok(!repeated("New York", "NewYork"));
+});
+
+test("the one compensated sum: values that overflow a sum are still refused, and a small value beside a huge one is kept", () => {
+  assert.throws(() => radarText({ axisLabels: ["A", "B"], seriesList: [["S", [Number.MAX_VALUE, Number.MAX_VALUE]]] }), RangeError);
+  // The exact mean is 14 / 5 = 2.8, which sits inside the range and reads as the whole number 3; a plain running sum gives 8 / 5 and reads 2.
+  assert.equal(averageOf([1e252, 6, -1e252, 4, 4]), "3");
 });

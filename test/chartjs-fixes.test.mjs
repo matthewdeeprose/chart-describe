@@ -191,3 +191,17 @@ test("a pie whose values sum within range in the order given but past it high to
   assert.deepEqual(lib.chartjs.describe(pie([1e308, 1e308, -1e308])), NON_FINITE_TOTAL, "the order the adapter already refused");
   assert.equal(lib.chartjs.describe(pie([1e307, -1e307, 1e307])).supported, true, "a sum that stays in range is described");
 });
+
+// An empty label is a string Chart.js draws as nothing, so it reads as unlabelled, the same as a label of spaces.
+test("an empty label reads as unlabelled, as a label of spaces does; a label that is not a string is still refused", () => {
+  const config = (type, labels) => ({ type, data: { labels, datasets: [{ label: "S", data: [1, 2, 3] }] } });
+  for (const blank of ["", "   "]) {
+    const pie = lib.chartjs.describe(config("pie", ["A", blank, "C"]));
+    assert.equal(pie.supported, true, JSON.stringify(blank));
+    assert.ok(pie.detailed.includes("Unlabelled segment 2"), JSON.stringify(blank));
+    const bar = lib.chartjs.describe(config("bar", ["A", blank, "C"]));
+    assert.equal(bar.supported, true, JSON.stringify(blank));
+    assert.ok(bar.detailed.includes("Unlabelled category 2"), JSON.stringify(blank));
+  }
+  assert.deepEqual(lib.chartjs.describe(config("pie", ["A", 2, "C"])), { supported: false, reason: "non-string-label" });
+});

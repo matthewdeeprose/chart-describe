@@ -492,9 +492,9 @@
     if (!model.domainAxis || model.domainAxis.labels === null) {
       return unsupported(REASONS.MISSING_LABELS);
     }
-    if (
-      model.domainAxis.labels.some((l) => typeof l !== "string" || l === "")
-    ) {
+    // An empty label is a string Chart.js draws as nothing, the same as a label of spaces, so it
+    // reaches the builder and reads as unlabelled there ("Unlabelled segment 2"), as in Mermaid.
+    if (model.domainAxis.labels.some((l) => typeof l !== "string")) {
       return unsupported(REASONS.NON_STRING_LABEL);
     }
     if (model.series.some((r) => r.values.some((v) => v === null))) {
