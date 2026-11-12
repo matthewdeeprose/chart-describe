@@ -367,11 +367,14 @@ test("a leading space with a trailing joiner still makes a repeat", () => {
   assert.deepEqual(categoryList(lines), ["• South", "•  North (segment 1)", `• North${ZJ} (segment 2)`]);
 });
 
-test("names that differ by case or by interior spaces are not repeats", () => {
+test("names that differ by case or by a missing space are not repeats; a longer run of spaces is a repeat", () => {
   const upper = describe("Case", [["north", 30], ["North", 70]]);
   assert.deepEqual(categoryList(upper.lines), ["• North", "• north"]);
+  const missing = describe("Missing", [["NorthEnd", 30], ["North End", 70]]);
+  assert.deepEqual(categoryList(missing.lines), ["• North End", "• NorthEnd"]);
+  // A run of white space reads as one space, so these are one name written twice.
   const interior = describe("Interior", [["North  End", 30], ["North End", 70]]);
-  assert.deepEqual(categoryList(interior.lines), ["• North End", "• North  End"]);
+  assert.deepEqual(categoryList(interior.lines), ["• North End (segment 2)", "• North  End (segment 1)"]);
 });
 
 test("blank names read unlabelled segment N, from their declaration position", () => {
@@ -572,8 +575,8 @@ test("22b: the repeat key trims these characters at the edges", () => {
   assert.ok(describe("©", [["A", 1]]).short.startsWith('A pie chart titled "©" showing'));
 });
 
-test("22c: the C0 and C1 controls and U+180F draw in Chromium, so they stay a name and a title", () => {
-  for (const drawn of ["\u0000", "\u0001", "\u007F", "\u0085", "\u180F"]) {
+test("22c: the C0 and C1 controls (bar U+001D and U+007F) and U+180F draw in Chromium, so they stay a name and a title", () => {
+  for (const drawn of ["\u0000", "\u0001", "\u0085", "\u180F"]) {
     const shown = JSON.stringify(drawn);
     assert.ok(describe(drawn, [["A", 1], ["B", 2]]).short.startsWith("A pie chart titled"), shown);
     const { lines } = describe("", [["Real", 50], [drawn, 30], ["Other", 20]]);
@@ -709,4 +712,124 @@ test("a title or a name made of one of the 37 drawn marks is a name; the members
 test("the one compensated sum: values that overflow a sum are still refused, and a small value beside a huge one is kept", () => {
   assert.throws(() => describe("", [["A", Number.MAX_VALUE], ["B", Number.MAX_VALUE]]), RangeError);
   assert.ok(describe("", [["A", 1e16], ["B", 1], ["C", 1]]).detailed.includes("• Total: 10000000000000002"));
+});
+
+// ---- Share rules, repeat key, near-ties and invisible controls ----
+
+const segmentsOf = (count, valueAt) => Array.from({ length: count }, (_, i) => [`S${i + 1}`, valueAt(i)]);
+
+// Rule 31: a tie sentence reads the lowest and the highest share the members' own rows print
+
+test("31a: all-equal and joint-largest sentences read a range where the rows differ", () => {
+  // Fifteen of 1e12 and one of 999999999999: the rows print 6.3% and 6.2%.
+  const sixteen = describe("", segmentsOf(16, (i) => (i === 15 ? 999999999999 : 1000000000000)));
+  assert.ok(sixteen.short.endsWith("All 16 segments are about equal, at 6.2% to 6.3% each."), sixteen.short);
+  assert.ok(sixteen.detailed.includes("• All 16 segments are about equal, at 6.2% to 6.3% each."), sixteen.detailed);
+  const joint = describe("", [["Alpha", 2005000000000], ["Bravo", 2004999999999], ["Cedar", 1996666666667], ["Dune", 1996666666667], ["Ember", 1996666666667]]);
+  assert.ok(joint.short.includes("at 20.0% to 20.1% each."), joint.short);
+});
+
+test("31b: at the edge the range reads less than 0.1% to 0.1%", () => {
+  const many = describe("", segmentsOf(2000, (i) => (i === 1999 ? 999999999999 : 1000000000000)));
+  assert.ok(many.short.endsWith("All 2000 segments are about equal, at less than 0.1% to 0.1% each."), many.short);
+});
+
+test("31c: shares that print alike still read one share", () => {
+  assert.ok(describe("", [["A", 5], ["B", 5], ["C", 5]]).short.endsWith("All three segments are equal, at 33.3% each."));
+  assert.ok(describe("", [["A", 1000000000001], ["B", 1000000000000], ["C", 1]]).short.includes("at 50.0% each."));
+  assert.ok(describe("", segmentsOf(2, () => 1)).short.endsWith("Both segments are equal, at 50.0% each."));
+});
+
+// Rule 32: two values that differ are not "joint"
+
+test("32a: a joint largest of values that differ reads about equal", () => {
+  const { short } = describe("", [["A", 1000000000000], ["B", 999999999999], ["C", 5]]);
+  assert.ok(short.endsWith("A and B are the largest segments, about equal, at 50.0% each."), short);
+  assert.ok(describe("", [["A", 4503599627370496], ["B", 4503599627370495], ["C", 1]]).short.endsWith("A and B are the largest segments, about equal, at 50.0% each."));
+});
+
+test("32b: values that are one value stay joint", () => {
+  assert.ok(describe("", [["A", 5], ["B", 5], ["C", 3]]).short.endsWith("A and B are the joint largest segments, at 38.5% each."));
+  assert.ok(describe("", [["A", 0.1 + 0.2], ["B", 0.3], ["C", 0.1]]).short.endsWith("A and B are the joint largest segments, at 42.9% each."));
+});
+
+// Rule 33: a total of decimals is the exact sum of the values as written, up to sixteen digits
+
+test("33a: a total never prints below one of its own segments", () => {
+  assert.ok(describe("", [["A", 12345678901.12345], ["B", 0.00001]]).detailed.includes("• Total: 12345678901.12346"));
+  assert.ok(describe("", [["A", 12345678901.12345], ["B", 12345678901.12345]]).detailed.includes("• Total: 24691357802.2469"));
+  assert.ok(describe("", [["A", 12345678901.12341]]).detailed.includes("• Total: 12345678901.12341"));
+  assert.ok(describe("", [["A", 8554.36433], ["B", 62659051461.59827]]).detailed.includes("• Total: 62659060015.9626"));
+});
+
+test("33b: float noise in a sum of short decimals still reads as the plain total", () => {
+  assert.ok(describe("", [["A", 0.1], ["B", 0.2]]).detailed.includes("• Total: 0.3"));
+  assert.ok(describe("", segmentsOf(10, () => 0.1)).detailed.includes("• Total: 1"));
+  assert.ok(describe("", [["A", 0.1], ["B", 0.2], ["C", -0.3]]).detailed.includes("• Total: 0"));
+});
+
+// Rule 34: a share beside a rounding boundary rounds the way its exact value does
+
+test("34: a share a hair under a half rounds down, and an exact half still rounds up", () => {
+  assert.ok(describe("", [["A", 20.04999999999], ["B", 79.95000000001]]).detailed.includes("• A: 20.04999999999 (20.0%)"));
+  assert.ok(describe("", [["A", 20.05], ["B", 79.95]]).detailed.includes("• A: 20.05 (20.1%)"));
+});
+
+// Rule 35: the proportion phrase reads the share the row prints
+
+test("35: 24.95% prints 25.0% and reads about a quarter", () => {
+  const { short } = describe("", [["Big", 499], ["P1", 498], ["P2", 498], ["P3", 498], ["P4", 7]]);
+  assert.ok(short.endsWith("Big is the largest segment at 25.0%, representing about a quarter of the total."), short);
+  assert.ok(describe("", [["A", 25], ["B", 20], ["C", 20], ["D", 20], ["E", 15]]).short.endsWith("A is the largest segment at 25.0%, representing exactly a quarter of the total."));
+});
+
+// Rule 36: a tie says each member's own digits
+
+test("36: a float-noise tie lists the digits each row prints", () => {
+  assert.ok(describe("", [["A", 0.1 + 0.2], ["B", 0.3], ["C", 0.1]]).detailed.includes("• Largest segments: A and B (0.30000000000000004 and 0.3, 42.9% each)"));
+  assert.ok(describe("", [["A", 40], ["B", 40], ["C", 20]]).detailed.includes("• Largest segments: A and B (40 each, 40.0% each)"));
+});
+
+// Rule 37: the repeat key reads every white space as a space, removes the invisible characters before composing, and keeps what makes an emoji
+
+const repeats = (one, two) => /\(segment \d+\)/.test(describe("", [[one, 30], [two, 20], ["Other", 50]]).detailed);
+
+test("37a: white space of any width, and a run of it, is one space", () => {
+  for (const space of ["\u202F", "\u2009", "\u2003", "\u3000", "\t", "\r\n", "\u2028", "  "]) {
+    assert.ok(repeats("New York", `New${space}York`), JSON.stringify(space));
+  }
+  assert.ok(!repeats("New York", "NewYork"));
+  assert.ok(!repeats("New York", "New\u1680York"), "the Ogham space mark draws, so it is a name");
+});
+
+test("37b: a mark between a letter and its accent does not keep two spellings apart", () => {
+  assert.ok(repeats("Café", "Cafe\u034F\u0301"));
+  assert.ok(repeats("Café", "Cafe\u0301"));
+});
+
+test("37c: a joiner or a tag character makes a different name", () => {
+  const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}";
+  assert.ok(!repeats(family, "\u{1F468}\u{1F469}\u{1F467}"));
+  const flag = (tail) => "\u{1F3F4}" + [...tail].map((c) => String.fromCodePoint(0xe0000 + c.charCodeAt(0))).join("") + "\u{E007F}";
+  assert.ok(!repeats(flag("gbeng"), flag("gbsct")));
+  assert.ok(!repeats(flag("gbwls"), "\u{1F3F4}"));
+  assert.ok(repeats(flag("gbeng"), flag("gbeng") + "\u200B"));
+});
+
+// Rule 38: the compensated sum returns a sum that is not finite as a plain sum gives it
+
+test("38: an infinite value reads an infinite total, not NaN", () => {
+  assert.ok(describe("", [["A", Infinity], ["B", 1]]).detailed.includes("• Total: Infinity"));
+});
+
+// U+001D and U+007F draw nothing in Chromium, so they read as no name and no title; U+0001 draws a box and stays a name
+
+test("a title or a name of only U+001D or U+007F reads as none, and U+0001 is still a name", () => {
+  for (const blank of ["\u001D", "\u007F"]) {
+    const shown = JSON.stringify(blank);
+    assert.ok(describe(blank, [["A", 1], ["B", 2]]).short.startsWith("A pie chart showing"), shown);
+    const { lines } = describe("", [["Real", 50], [blank, 30], ["Other", 20]]);
+    assert.deepEqual(categoryList(lines), ["• Real", "• Unlabelled segment 2", "• Other"], shown);
+  }
+  assert.ok(describe("\u0001", [["A", 1], ["B", 2]]).short.startsWith("A pie chart titled"));
 });

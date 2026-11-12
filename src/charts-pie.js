@@ -147,7 +147,7 @@
   // joiner, Hangul fillers, Khmer vowel inherents, Mongolian selectors, variation selectors, tag characters),
   // and the Braille blank (which draws as nothing but is not default-ignorable). The C0 and C1 controls and U+180F are NOT in the
   // set: Chromium draws or advances them, so a name made of them is something a sighted reader sees.
-  const INVISIBLE_CHARS = "[\\s\\p{Cf}\\p{Default_Ignorable_Code_Point}\\u2800]";
+  const INVISIBLE_CHARS = "[\\s\\p{Cf}\\p{Default_Ignorable_Code_Point}\\u2800\\u001D\\u007F]";
   // Characters in the invisible set that Chromium nonetheless draws as ink: U+180F (Mongolian free variation
   // selector four) and the 37 that leave a mark when drawn alone (the Arabic and Syriac number signs, the Ogham space mark, the
   // interlinear annotation anchors, the Kaithi number signs, the Egyptian and shorthand format controls). They are excluded where the
@@ -194,6 +194,40 @@
     return Number.isFinite(rounded) ? rounded : total;
   }
 
+  // The most digits an exact decimal total may carry. A double holds fifteen digits for certain and a sixteenth in many cases, so
+  // a total of sixteen digits or fewer is written exactly; a longer one cannot be held by the sum and keeps the rounding above.
+  const EXACT_TOTAL_MAX_DIGITS = 16;
+
+  /**
+   * The total as the sum of the values exactly as they are written, so it is never smaller than one of its own parts and
+   * carries no float noise. Each value is read from its own text (formatValue) and added as a whole number of its finest place.
+   * Returns null when a value is not plain digits (not finite) or the sum needs more than sixteen digits.
+   * @param {Array<{value: number}>} segments - The segments
+   * @returns {string|null} The total as text, or null
+   */
+  function exactDecimalTotal(segments) {
+    const parts = [];
+    let places = 0;
+    for (const segment of segments) {
+      const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(formatValue(segment.value));
+      if (!match) return null;
+      const [, sign, whole, fraction = ""] = match;
+      parts.push({ sign, whole, fraction });
+      places = Math.max(places, fraction.length);
+    }
+    const sum = parts.reduce((running, { sign, whole, fraction }) => {
+      const scaled = BigInt(whole + fraction.padEnd(places, "0"));
+      return sign ? running - scaled : running + scaled;
+    }, 0n);
+    // A pie of whole numbers keeps the whole-number rule (every digit of the nearest double), so only a decimal value comes here.
+    if (places === 0) return null;
+    const digits = (sum < 0n ? -sum : sum).toString().padStart(places + 1, "0");
+    const written = `${digits.slice(0, -places)}.${digits.slice(-places)}`.replace(/\.?0+$/, "");
+    // Count the digits that matter: not the leading zeros, not the point.
+    if (written.replace(/^0?\.?0*/, "").replace(".", "").length > EXACT_TOTAL_MAX_DIGITS) return null;
+    return sum < 0n ? `-${written}` : written;
+  }
+
   /**
    * The sum of a list of numbers, with Neumaier's compensation: the low part that each addition
    * drops is kept and added back at the end, so a small value beside a huge one is not lost
@@ -234,9 +268,10 @@
     return total > 0 && !hasNegativeValue(segments);
   }
 
-  // How close twice a scaled share must sit to an odd whole number to count as a half (the radar's
-  // tolerance: far below any difference two typed decimals make, far above one division's error).
-  const HALF_TOLERANCE = 1e-9;
+  // How close twice a scaled share must sit to an odd whole number to count as a half, in steps between neighbouring doubles
+  // at that number. A share is one division and a few multiplications from its two sums, so it is off by a few steps at most;
+  // an absolute tolerance would take a share that really sits beside a boundary (20.04999999999%) for the boundary.
+  const HALF_STEPS = 4;
 
   /**
    * A number rounded to a count of decimal places, halves away from zero (the radar's helper).
@@ -250,7 +285,7 @@
     const twice = magnitude * 2;
     const nearestTwice = Math.round(twice);
     const isHalf =
-      Math.abs(twice - nearestTwice) < HALF_TOLERANCE && nearestTwice % 2 === 1;
+      Math.abs(twice - nearestTwice) <= HALF_STEPS * Number.EPSILON * twice && nearestTwice % 2 === 1;
     const roundedMagnitude = isHalf ? (nearestTwice + 1) / 2 : Math.round(magnitude);
     const rounded = (Math.sign(number) * roundedMagnitude) / scale;
     return rounded === 0 ? 0 : rounded;
@@ -292,10 +327,10 @@
       exact
         ? value * Math.round(1 / target) === total
         : Math.abs(fraction - target) <= FRACTION_TOLERANCE;
-    // The share as the reader hears it. One that prints as a simple fraction
-    // without being it reads "about", so "50.0%" never sits beside "over half".
-    const printsAs = (target) =>
-      (fraction * 100).toFixed(1) === (target * 100).toFixed(1);
+    // The share as the reader hears it: the one the row prints, rounded the same way (halves away from zero). One that prints as a
+    // simple fraction without being it reads "about", so "50.0%" never sits beside "over half", nor "25.0%" beside nothing.
+    const printed = roundedShare(value, total).toFixed(1);
+    const printsAs = (target) => printed === (target * 100).toFixed(1);
     if (near(1 / 2)) return "exactly half";
     if (printsAs(1 / 2)) return "about half";
     if (fraction > 1 / 2) return "over half";
@@ -389,19 +424,30 @@
   // whether the name repeats.
   const SEGMENT_NAMES = new WeakMap();
 
-  // Inside a name the invisible characters are removed for the repeat key, but not a space, which a reader sees as a gap.
-  // U+FEFF is white space to JavaScript and draws as nothing, so it is removed too.
-  const INVISIBLE_INSIDE = new RegExp(`\\uFEFF|(?!\\s)${INVISIBLE_ONE}`, "gu");
+  // Two invisible characters that change what a name draws, so the repeat key keeps them where they do: a zero-width joiner between two
+  // pictographs (a family of three is not three people side by side) and the tag characters after a pictograph (the flags of England,
+  // Scotland and Wales are tags after a black flag). One at the edge of a name, or beside a letter, is junk and is removed.
+  const KEY_PICTOGRAPH = String.raw`\p{Extended_Pictographic}`;
+  const KEY_TAGS = String.raw`[\u{E0020}-\u{E007F}]`;
+  const KEY_KEPT = String.raw`(?:(?<=${KEY_PICTOGRAPH}️?)‍(?=${KEY_PICTOGRAPH})|(?<=${KEY_PICTOGRAPH}${KEY_TAGS}*)${KEY_TAGS})`;
+  // The repeat key removes every invisible character, at the ends and inside, before the name is composed (NFC), except white space
+  // (a gap a reader sees) and the characters kept above. U+FEFF is white space to JavaScript and draws as nothing, so it goes too.
+  const KEY_INVISIBLE = new RegExp(`\\uFEFF|(?!\\s)(?!${KEY_KEPT})${INVISIBLE_ONE}`, "gu");
+  // White space the picture does not draw as ink (U+1680, the Ogham space mark, is drawn and so stays a character).
+  const KEY_SPACE = String.raw`(?:(?!${DRAWN_MARKS})\s)+`;
+  const KEY_SPACE_EDGES = new RegExp(`^${KEY_SPACE}|${KEY_SPACE}$`, "gu");
+  const KEY_SPACE_RUN = new RegExp(KEY_SPACE, "gu");
 
   /**
-   * The key two names repeat on, so that names which look and sound the same are a repeat: the name is composed one way (NFC), the
-   * invisible characters at its ends and inside it are removed (white space inside is kept, so "New York" and "NewYork" stay two
-   * names), and a no-break space is read as a space. Case and lookalike letters are kept, so "North" and "NORTH" stay two names.
+   * The key two names repeat on, so that names which look and sound the same are a repeat: the invisible characters are removed (bar the
+   * kept ones above), the name is composed one way (NFC), white space at its ends is dropped, and every run of white space inside it
+   * (no-break, thin, em or ideographic space, tab, line break, two spaces) reads as one space, so "New York" and "New  York" are one
+   * name and "New York" and "NewYork" stay two. Case and lookalike letters are kept, so "North" and "NORTH" stay two names.
    * @param {string} name - A segment, axis or series name
    * @returns {string} The key
    */
   function repeatKey(name) {
-    return String(name).normalize("NFC").replace(NAME_EDGES, "").replace(INVISIBLE_INSIDE, "").replace(/\u00A0/g, " ");
+    return String(name).replace(KEY_INVISIBLE, "").normalize("NFC").replace(KEY_SPACE_EDGES, "").replace(KEY_SPACE_RUN, " ");
   }
 
   function registerSegmentNames(segments) {
@@ -464,6 +510,22 @@
   }
 
   /**
+   * The percentage runs of a tie sentence ("at 6.3% each"): the one share every member's own row prints, or, where the
+   * rows differ, the lowest and the highest printed share ("6.2% to 6.3%"), so the sentence never gives a share that
+   * no member's row carries. The group is ordered by the share as rounded, which is what each row prints.
+   */
+  function sharedShareRuns(group, total) {
+    const { text, term } = modelCore();
+    const shareOf = (segment) => roundedShare(segment.value, total);
+    const lowest = group.reduce((one, other) => (shareOf(other) < shareOf(one) ? other : one));
+    const highest = group.reduce((one, other) => (shareOf(other) > shareOf(one) ? other : one));
+    const low = formatPercentage(lowest.value, total);
+    const high = formatPercentage(highest.value, total);
+    if (low === high) return [term("percentage", [text(low)])];
+    return [term("percentage", [text(low)]), text(" to "), term("percentage", [text(high)])];
+  }
+
+  /**
    * One Key Insights entry for the largest or the smallest group. A group of
    * one reads "Largest segment: X (v, p)"; a tie reads "Largest segments: X and
    * Y (v each, p each)".
@@ -473,10 +535,12 @@
     const { text, term, item } = modelCore();
     const tied = group.length > 1;
     const each = tied ? [text(" each")] : [];
-    // A tie whose values differ lists each value, so "each" is never said of values that are not one value.
-    const values = tied && !same
-      ? joinRuns(group.map((segment) => [term("value", [text(formatValue(segment.value))])]))
-      : [term("value", [text(formatValue(group[0].value))]), ...each];
+    // A tie whose values differ lists each value, so "each" is never said of values that are not one value. A tie whose values are one
+    // value but are written differently (0.30000000000000004 and 0.3) lists each as well, so no member reads a value its own row does not print.
+    const written = group.map((segment) => formatValue(segment.value));
+    const values = tied && !(same && written.every((one) => one === written[0]))
+      ? joinRuns(written.map((one) => [term("value", [text(one)])]))
+      : [term("value", [text(written[0])]), ...each];
 
     return item(
       [
@@ -551,7 +615,7 @@
     if (ties.allEqual) {
       return [
         text(`${allEqualLead(segments.length, ties.largestSame)}, at `),
-        percentage,
+        ...sharedShareRuns(segments, total),
         text(" each."),
       ];
     }
@@ -559,8 +623,9 @@
     if (ties.largest.length > 1) {
       return [
         ...tiedNames(ties.largest),
-        text(" are the joint largest segments, at "),
-        percentage,
+        // Two values that differ are not one value, so they are not "joint": the same "about equal" the all-equal sentence uses.
+        text(ties.largestSame ? " are the joint largest segments, at " : " are the largest segments, about equal, at "),
+        ...sharedShareRuns(ties.largest, total),
         text(" each."),
       ];
     }
@@ -663,7 +728,7 @@
       item(
         [
           text("Total: "),
-          term("value", [text(formatValue(cleanTotal(total, finestDecimalPlaces(segments))))]),
+          term("value", [text(exactDecimalTotal(segments) ?? formatValue(cleanTotal(total, finestDecimalPlaces(segments))))]),
         ],
         { role: PIE_ROLES.TOTAL }
       )
