@@ -500,15 +500,22 @@ test("repeat: a label with a trailing zero-width space repeats the label without
   assert.ok(out.lines.includes("Autumn (position 3) | 2"));
 });
 
-test("repeat: a different case or an interior space is a different label", () => {
+test("repeat: a different case is a different label, and a run of white space inside a label is one space", () => {
   const lower = describe(AUTUMN("autumn"));
   assert.equal(
     lower.short,
     'A bar chart showing "Level" for four categories. The highest value, 9 at "autumn", is 140% above the average.'
   );
   assert.ok(lower.lines.includes("autumn | 9"));
+  // Two spaces, a no-break space, a thin space, a tab or a line break sound the same as one space, so the labels repeat.
   const interior = describe(levelBar(["Spring", "Late  Autumn", "Late Autumn", "Winter"], [1, 9, 2, 3]));
-  assert.ok(interior.lines.includes("Late  Autumn | 9"));
+  assert.ok(interior.lines.includes("Late  Autumn (position 2) | 9"));
+  assert.ok(interior.lines.includes("Late Autumn (position 3) | 2"));
+  const thin = describe(levelBar(["Spring", "Late Autumn", "Late Autumn", "Winter"], [1, 9, 2, 3]));
+  assert.ok(thin.lines.includes("Late Autumn (position 2) | 9"));
+  // But no space at all is a different label.
+  const joined = describe(levelBar(["Spring", "LateAutumn", "Late Autumn", "Winter"], [1, 9, 2, 3]));
+  assert.ok(joined.lines.includes("LateAutumn | 9"));
 });
 
 test("blank: a label of zero-width characters only is blank", () => {
@@ -765,11 +772,14 @@ test("spread: data that varies never has a spread spoken as zero, however small"
 test("spike and dip: said only when a few points in one stretch stand apart from a level series", () => {
   const level = (before, at, after, value, odd) => Array.from({ length: before + at + after }, (_, i) => (i >= before && i < before + at ? odd : value));
   const sentence = (values) => describe(chart(band(null, label(values.length)), [line("S", values)])).lines.find((text) => text.includes("mostly level"));
-  // The ends are the outliers: the level is NOT the spike (or the dip). They read as stretches, never as "a large spike".
-  assert.equal(sentence([10, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 10]), '• The "S" series is mostly level, apart from raised stretches.');
-  assert.equal(sentence([1, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 1]), '• The "S" series is mostly level, apart from lowered stretches, with values between 1 and 10.');
+  // The ends are the outliers: the level is NOT the spike (or the dip). They read as points, never as "a large spike" (a
+  // stretch is a run of values, and each of these is one value).
+  assert.equal(sentence([10, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 10]), '• The "S" series is mostly level, apart from raised points.');
+  assert.equal(sentence([1, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 1]), '• The "S" series is mostly level, apart from lowered points, with values between 1 and 10.');
   // Two spikes are not "a large spike".
-  assert.equal(sentence([0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0]), '• The "S" series is mostly level, apart from raised stretches.');
+  assert.equal(sentence([0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0]), '• The "S" series is mostly level, apart from raised points.');
+  // Two runs of values are stretches, however many points each holds.
+  assert.equal(sentence([0, 0, 0, 0, 5, 5, 0, 0, 0, 0, 0, 5, 5, 0, 0, 0, 0, 0, 0, 0]), '• The "S" series is mostly level, apart from raised stretches.');
   // One spike, one dip and a two-point spike keep their words.
   assert.equal(sentence(level(6, 1, 9, 0, 5)), '• The "S" series is mostly level, apart from a large spike.');
   assert.ok(sentence(level(6, 1, 9, 5, 0)).includes("apart from a large dip"));
@@ -807,8 +817,8 @@ test("invisible set: Khmer vowels, Mongolian selectors and plane-14 selectors re
     const titled = describe({ ...chart(band(null, ["A", "B"]), [bar("S", [1, 3])]), title: blank });
     assert.ok(!titled.short.includes("titled"), where);
   }
-  // HALT (draws-nothing.mjs): the C0 and C1 controls and U+180F draw or advance in Chromium, so they stay names and are NOT in the class.
-  for (const drawn of ["\u0001", "\u0085", "\u007F", "᠏"]) {
+  // The C0 and C1 controls draw in Chromium (bar U+001D and U+007F) and so does U+180F: they stay names and are NOT in the class.
+  for (const drawn of ["\u0001", "\u0085", "᠏"]) {
     const out = describe(chart(band(null, ["A", drawn, "C"]), [bar("S", [1, 5, 2])]));
     assert.ok(out.lines.includes(`• Highest value: 5 ("${drawn}").`), `U+${drawn.codePointAt(0).toString(16).toUpperCase()} is quoted, not unlabelled`);
   }
@@ -905,11 +915,11 @@ test("the spread of huge or tiny values is a number, not Infinity and not zero",
 
 test("a level series with a large range that no single spike or dip explains is not called stable", () => {
   const twoSpikes = describe(chart(band(null, label(20)), [line("S", [1, 1, 1, 9, 1, 1, 1, 1, 1, 1, 1, 1, 1, 9, 1, 1, 1, 1, 1, 1])]));
-  assert.ok(twoSpikes.lines.includes('• The "S" series is mostly level, apart from raised stretches.'));
+  assert.ok(twoSpikes.lines.includes('• The "S" series is mostly level, apart from raised points.'));
   const plateau = describe(chart(band(null, label(12)), [line("S", [1, 1, 1, 1, 9, 9, 9, 9, 1, 1, 1, 1])]));
   assert.ok(plateau.lines.includes('• The "S" series is mostly level, apart from a raised stretch.'));
   const mesa = describe(chart(band(null, label(12)), [line("S", [1, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 1])]));
-  assert.ok(mesa.short.includes("is mostly level, apart from lowered stretches"));
+  assert.ok(mesa.short.includes("is mostly level, apart from lowered points"));
   // Just on the other side: one spike in one short stretch keeps its sentence, and a small range stays stable.
   const spike = describe(chart(band(null, label(12)), [line("S", [1, 1, 1, 1, 1, 9, 1, 1, 1, 1, 1, 1])]));
   assert.ok(spike.lines.includes('• The "S" series is mostly level, apart from a large spike.'));
@@ -921,7 +931,8 @@ test("a climb with one step against its direction of more than a quarter of the 
   const zigzag = describe(chart(band(null, label(13)), [line("S", [0, 10, 20, 100, 30, 40, 100, 50, 60, 70, 80, 90, 100])]));
   assert.ok(!zigzag.lines.some((text) => text.includes("consistently")));
   assert.ok(zigzag.lines.includes('• The "S" series shows a generally increasing trend, with fluctuations.'));
-  assert.ok(zigzag.lines.includes("• The data rises and falls repeatedly, with two peaks and two troughs."));
+  // The peaks bullet names L13 as a position of the highest value; the end point is not in the count, so the sentence says so.
+  assert.ok(zigzag.lines.includes("• The data rises and falls repeatedly, with two peaks and two troughs, and it ends at its highest value."));
   // The gate is a single step: the staircase with one rise of two thirds of the range, and a fall of 30 on a range of 80, are no longer consistent.
   const drop = describe(chart(band(null, label(10)), [line("Score", [10, 9, 8, 7, 6, 5, 4, 3, 9, 1])]));
   assert.ok(drop.lines.includes('• The "Score" series shows a generally decreasing trend, with fluctuations.'));
@@ -962,7 +973,8 @@ const UNDRAWN_NOTE = "written in the code, not drawn in the picture";
 
 test("undrawn values: figures cover the drawn values, and one sentence names the rest with the disclosure", () => {
   const out = describe(chart(band(null, ["A", "B", "C"]), [bar("", [4, 9, 6, 12, 2])]));
-  assert.equal(out.short, "A bar chart for three categories. Values range from 4 to 9 with an average of 6.33.");
+  // The short tier says the picture leaves values out, because its figures cover the drawn ones only.
+  assert.equal(out.short, "A bar chart for three categories. Two further values are written in the code and not drawn. Values range from 4 to 9 with an average of 6.33.");
   assert.ok(out.lines.includes(`• The bar series also holds two values past the last label: 12 and 2 (${UNDRAWN_NOTE}).`));
   assert.ok(out.lines.includes('• Highest value: 9 ("B").'));
   assert.ok(out.lines.includes("• Average value: 6.33."));
@@ -979,9 +991,11 @@ test("undrawn values: a tie past the labels is no longer a position; the values 
   assert.ok(!out.lines.some((text) => text.includes("positions past the labels")));
 });
 
-test("undrawn values: two series, one longer, keep the mismatch sentence on the full counts and the figures on the drawn values", () => {
+test("undrawn values: two series, one longer, keep the mismatch sentence on the full counts, and the short tier discloses the rest", () => {
   const out = describe(chart(band(null, ["A", "B", "C"]), [bar("North", [1, 2, 3, 4]), bar("South", [3, 2, 1])]));
   assert.ok(out.lines.includes('• The chart\'s series have different numbers of values: the "North" series has four and the "South" series has three.'));
+  // The short tier says a value is left out, beside the sentence that counts the code's values.
+  assert.ok(out.short.includes("One further value is written in the code and not drawn. The chart's series have different numbers of values."));
   assert.ok(out.lines.includes(`• The "North" series also holds one value past the last label: 4 (${UNDRAWN_NOTE}).`));
   assert.ok(out.lines.includes('• Highest value in the "North" series: 3 ("C").'));
   assert.ok(out.lines.includes(`Position 4 | 4 (${UNDRAWN_NOTE}) | no value`));
@@ -1043,4 +1057,105 @@ test("an unclear trend is one phrase, fluctuates with no clear trend, with or wi
   assert.ok(wiggle.lines.some((text) => text.includes("fluctuates with no clear trend")), wiggle.lines.join(" | "));
   assert.ok(!wiggle.lines.some((text) => text.includes("is fluctuating")));
   assert.ok(!wiggle.short.includes("is fluctuating"));
+});
+
+// ---- Means, trends, ranges and repeated names ----
+
+test("whole numbers: a real mean is never swallowed while the compensated sum is exact", () => {
+  const average = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).short;
+  // Whole numbers a double holds exactly: the true means are 0.25, 0.5, 1 and 1/3, and none reads as 0.
+  assert.ok(average([3000000000000001, -3000000000000000, 0, 0]).includes("with an average of 0.25."));
+  assert.ok(average([1e16, 1, 1, -1e16]).includes("with an average of 0.5."));
+  assert.ok(average([-4503599627370495, 4503599627370498, -4503599627370499, 4503599627370500]).includes("with an average of 1."));
+  assert.ok(average([1e16, -1e16, 1]).includes("with an average of 0.33."));
+  // Just on the other side: float noise on typed decimals is still 0, a mean below the documented bound is still 0, and a true 0 is 0.
+  assert.ok(average([0.1, 0.2, -0.3]).includes("with an average of 0."));
+  assert.ok(average([1, -1, 1e-16]).includes("with an average of 0."));
+  assert.ok(average([4.98e222, 1.47e199, -4.98e222, -1.47e199]).includes("with an average of 0."));
+});
+
+test("whole numbers: two series whose exact means differ are not the same average", () => {
+  const two = (a, b) => describe(chart(band(null, label(a.length)), [bar("N", a), line("M", b)])).short;
+  assert.ok(two([1e16, 1, 1], [1e16, 1, 4]).includes('The "M" series shows the highest overall values.'));
+  assert.ok(two([4503599627370496, 4503599627370497, -4503599627370496, -4503599627370495], [4503599627370496, 4503599627370496, -4503599627370496, -4503599627370496]).includes('The "N" series shows the highest overall values.'));
+  // Two identical series are still the same average, huge or not.
+  assert.ok(two([4503599627370496, 4503599627370497], [4503599627370496, 4503599627370497]).includes("The series have the same average."));
+  assert.ok(two([0.1, 0.2, 0.3], [0.1, 0.2, 0.3]).includes("The series have the same average."));
+});
+
+test("mostly level: points that stand apart both ways say so, and too many points apart is no clear trend", () => {
+  const trend = (values) => describe(chart(band(null, label(values.length)), [line("S", values)])).lines.find((text) => text.includes("mostly level") || text.includes("no clear trend"));
+  // Four raised points and three lowered: the sentence used to name only the lowered stretch.
+  assert.equal(trend([5, 5, 10, 10, 10, 10, 5, 5, 0, 0, 0, 5, 5, 5, 5, 5]), '• The "S" series fluctuates with no clear trend.');
+  // One raised point and one lowered point, level at the midpoint: both sides are named.
+  assert.equal(trend([0, 5, 5, 5, 10, 5, 5, 5, 5, 5, 5, 5]), '• The "S" series is mostly level, apart from raised and lowered stretches.');
+  assert.equal(trend([5, 5, 5, 10, 10, 5, 5, 5, 0, 0, 5, 5, 5, 5, 5, 5]), '• The "S" series is mostly level, apart from raised and lowered stretches.');
+  // A wide square wave holds 43% of its points off its level: not "apart from raised stretches".
+  const wave = [];
+  for (let block = 0; block < 7; block += 1) for (let i = 0; i < 5; i += 1) wave.push(block % 2 ? 10 : 0);
+  assert.equal(trend(wave), '• The "S" series fluctuates with no clear trend.');
+  // Just on the other side: 35% (seven of twenty) and one side only keep their sentence.
+  assert.equal(trend([2, 2, 2, 6, 6, 6, 6, 2, 2, 2, 2, 2, 2, 6, 6, 6, 2, 2, 2, 2]), '• The "S" series is mostly level, apart from raised stretches.');
+  assert.equal(trend([1, 1, 1, 1, 9, 9, 9, 9, 1, 1, 1, 1]), '• The "S" series is mostly level, apart from a raised stretch.');
+});
+
+test("range ends: a rounded end is not left beside a longer end it would round to", () => {
+  const range = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).short;
+  assert.ok(range([1.0049999, 1.005]).includes("Values range from 1.0049999 to 1.005 "));
+  // Just on the other side: ends that differ at the figure shown keep their rounding.
+  assert.ok(range([2.7857142857, 4.8]).includes("from about 2.79 to 4.8"));
+  assert.ok(range([0.00001, 0.00002]).includes("from about 0.00001 to about 0.00002"));
+  assert.ok(range([1.004999, 1.005]).includes("from 1.004999 to 1.005"));
+  // A whole-number end beside a float-noise end is not the same case: 0 and 0.30000000000000004 keep "about 0.30".
+  const noisy = describe(chart(band(null, label(7)), [line("S", [0, 0.1, 0.2, 0.3, 0.225, 0.3, 0.30000000000000004])]));
+  assert.ok(noisy.short.includes("ranging from 0 to about 0.30."), noisy.short);
+});
+
+test("repeat: one key for series names and category labels", () => {
+  const headers = (names) => describe(chart(band(null, label(3)), [bar(names[0], [1, 2, 3]), line(names[1], [3, 2, 1])])).lines.find((text) => text.startsWith("Category"));
+  // A thin space, an em space, a tab and a doubled space all sound like one space: a repeat.
+  for (const space of [" ", " ", "\t", "  ", " "]) {
+    const row = headers(["New York", `New${space}York`]);
+    assert.ok(row.includes("(series 1)") && row.includes("(series 2)"), JSON.stringify(row));
+  }
+  // No space at all, a different case and a different pictograph sequence are different names.
+  for (const pair of [["New York", "NewYork"], ["North", "NORTH"], ["\u{1F468}‍\u{1F469}‍\u{1F467}", "\u{1F468}\u{1F469}\u{1F467}"]]) {
+    assert.ok(!headers(pair).includes("(series"), JSON.stringify(pair));
+  }
+  // The flags of England and Scotland are tag characters after a black flag: different names. A stray joiner at an edge is junk.
+  const england = "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}";
+  const scotland = "\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}";
+  assert.ok(!headers([england, scotland]).includes("(series"));
+  assert.ok(headers(["North", "North‍"]).includes("(series 1)"));
+  // A letter and its accent, composed or not, and a ZWJ between a letter and an accent, are one name (the join is not a pictograph's).
+  assert.ok(headers(["Café", "Cafe‍́"]).includes("(series 1)"));
+  // The same key serves category labels.
+  const labels = describe(chart(band(null, ["Spring", "Late Autumn", "Late Autumn"]), [bar("Level", [1, 9, 2])]));
+  assert.ok(labels.lines.includes("Late Autumn (position 2) | 9"));
+});
+
+test("repeat: the Ogham space mark draws as ink, so a name ending in it is not a repeat of the same name without it", () => {
+  const ogham = String.fromCodePoint(0x1680);
+  const row = describe(chart(band(null, label(3)), [bar("A", [1, 2, 3]), line(`A${ogham}`, [3, 2, 1])])).lines.find((text) => text.startsWith("Category"));
+  assert.equal(row, `Category | A | A${ogham}`);
+});
+
+test("compensated sum: a sum that overflows stays Infinity and is never NaN", () => {
+  const out = describe(chart(band(null, label(2)), [bar("S", [1.7e308, 1.7e308])]));
+  assert.ok(out.lines.includes("• Average value: Infinity."), out.lines.join(" | "));
+  assert.ok(!out.lines.some((text) => text.includes("NaN")));
+});
+
+// U+001D and U+007F draw nothing in Chromium, so they read as no name, no category and no title; U+0001 stays a name
+
+test("a category, series name or title of only U+001D or U+007F reads as none, and U+0001 is still a name", () => {
+  for (const blank of ["\u001D", "\u007F"]) {
+    const where = JSON.stringify(blank);
+    const cat = describe(chart(band(null, ["A", blank, "C"]), [bar("S", [1, 5, 2])]));
+    assert.ok(cat.lines.includes("• Highest value: 5 (unlabelled category 2)."), where);
+    const titled = describe({ ...chart(band(null, ["A", "B"]), [bar("S", [1, 3])]), title: blank });
+    assert.ok(!titled.short.includes("titled"), where);
+  }
+  const named = describe(chart(band(null, ["A", "\u0001", "C"]), [bar("S", [1, 5, 2])]));
+  assert.ok(named.lines.includes('• Highest value: 5 ("\u0001").'));
 });

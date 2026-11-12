@@ -3222,10 +3222,10 @@
    }
   ],
   "expected": {
-   "short": "A combined chart titled \"Attendance against capacity\" showing \"Seats\" with one bar series and one line series over three shared days. The chart's series have different numbers of values.",
-   "shortHTML": "A combined chart titled &quot;Attendance against capacity&quot; showing &quot;Seats&quot; with one bar series and one line series over three shared days. The chart&#39;s series have different numbers of values.",
-   "textShort": "A combined chart titled \"Attendance against capacity\" showing \"Seats\" with one bar series and one line series over three shared days. The chart's series have different numbers of values.",
-   "markdownShort": "A combined chart titled \"Attendance against capacity\" showing \"Seats\" with one bar series and one line series over three shared days. The chart's series have different numbers of values."
+   "short": "A combined chart titled \"Attendance against capacity\" showing \"Seats\" with one bar series and one line series over three shared days. Two further values are written in the code and not drawn. The chart's series have different numbers of values.",
+   "shortHTML": "A combined chart titled &quot;Attendance against capacity&quot; showing &quot;Seats&quot; with one bar series and one line series over three shared days. Two further values are written in the code and not drawn. The chart&#39;s series have different numbers of values.",
+   "textShort": "A combined chart titled \"Attendance against capacity\" showing \"Seats\" with one bar series and one line series over three shared days. Two further values are written in the code and not drawn. The chart's series have different numbers of values.",
+   "markdownShort": "A combined chart titled \"Attendance against capacity\" showing \"Seats\" with one bar series and one line series over three shared days. Two further values are written in the code and not drawn. The chart's series have different numbers of values."
   }
  },
  {

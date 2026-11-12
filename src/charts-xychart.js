@@ -156,6 +156,9 @@
     LEVEL_RAISED_MANY: "mostly level, apart from raised stretches",
     LEVEL_LOWERED: "mostly level, apart from a lowered stretch",
     LEVEL_LOWERED_MANY: "mostly level, apart from lowered stretches",
+    LEVEL_RAISED_POINTS: "mostly level, apart from raised points",
+    LEVEL_LOWERED_POINTS: "mostly level, apart from lowered points",
+    LEVEL_APART: "mostly level, apart from raised and lowered stretches",
     RISES: "rising",
     FALLS: "falling",
     UNKNOWN: "unknown",
@@ -185,6 +188,9 @@
     [TRENDS.LEVEL_RAISED_MANY]: "is mostly level, apart from raised stretches",
     [TRENDS.LEVEL_LOWERED]: "is mostly level, apart from a lowered stretch",
     [TRENDS.LEVEL_LOWERED_MANY]: "is mostly level, apart from lowered stretches",
+    [TRENDS.LEVEL_RAISED_POINTS]: "is mostly level, apart from raised points",
+    [TRENDS.LEVEL_LOWERED_POINTS]: "is mostly level, apart from lowered points",
+    [TRENDS.LEVEL_APART]: "is mostly level, apart from raised and lowered stretches",
     [TRENDS.RISES]: "rises",
     [TRENDS.FALLS]: "falls",
   });
@@ -296,7 +302,7 @@
   // A typed decimal (0.1) is stored to within half a unit in the last place of its own size, so a mean of n of them is wrong by at most
   // about this x the largest absolute value, whatever n is, once the sum itself is taken without loss (compensatedSum). A mean closer to 0
   // than that is rounding noise; two means closer to each other than that are the same average. Whole numbers are stored exactly, so for
-  // them (while the sum stays below 2^53) the bound is 0 and a real mean is never swallowed.
+  // them, while the compensated sum is exact (wholeSumIsExact), the bound is 0 and a real mean is never swallowed.
   const FLOAT_ERROR_PER_VALUE = Number.EPSILON;
 
   /**
@@ -327,8 +333,29 @@
    */
   function floatNoiseBound(values) {
     const largest = values.reduce((most, value) => Math.max(most, Math.abs(value)), 0);
-    if (values.every(Number.isInteger) && largest * values.length <= Number.MAX_SAFE_INTEGER) return 0;
+    if (wholeSumIsExact(values)) return 0;
     return FLOAT_ERROR_PER_VALUE * largest;
+  }
+
+  /**
+   * Whether compensatedSum is EXACT for these numbers: they are all whole numbers (a double holds one exactly) and the low parts that the
+   * additions drop are themselves whole numbers that stay within 2^53 - 1, so they are held and added back without a further rounding.
+   * Then the sum is the true sum rounded once, a real mean is never swallowed and a true 0 is exactly 0. The plain sum alone is exact
+   * only while every running total stays within 2^53 - 1; this also covers 1e16 + 1 + 1 - 1e16, where the running total does not.
+   * @param {Array<number>} values - The numbers that were added
+   * @returns {boolean} True when the sum is exact
+   */
+  function wholeSumIsExact(values) {
+    if (!values.every(Number.isInteger)) return false;
+    let sum = 0;
+    let dropped = 0;
+    for (const value of values) {
+      const next = sum + value;
+      dropped += Math.abs(sum) >= Math.abs(value) ? sum - next + value : value - next + sum;
+      if (!Number.isFinite(next) || Math.abs(dropped) > Number.MAX_SAFE_INTEGER) return false;
+      sum = next;
+    }
+    return true;
   }
 
   // A bare four-digit label is called a year only inside this span. A run such
@@ -667,7 +694,19 @@
     };
     // Two ends are also "the same" when one is rounded to a figure that equals the other (1 and about 1.00).
     const figure = (text) => Number(text.replace(/^about /, ""));
-    if (tier !== TIERS.SHORT || min === max || (ends.min !== ends.max && figure(ends.min) !== figure(ends.max))) {
+    // An end rounded to fewer decimals than the other end is written with must not read as the other end's neighbour: where it would
+    // round to that end's own figure ("about 1.00" beside 1.005, for 1.0049999), the ends are written to enough decimals to differ.
+    const decimalsOf = (text) => Math.min((text.replace(/^about /, "").split(".")[1] || "").length, MAX_RESTORED_DECIMALS);
+    const roundsToOther = (value, own, other) =>
+      own.startsWith("about ") && decimalsOf(other) > SHORT_TIER_ROUNDING && Number(value.toFixed(decimalsOf(other))) === figure(other);
+    if (
+      tier !== TIERS.SHORT ||
+      min === max ||
+      (ends.min !== ends.max &&
+        figure(ends.min) !== figure(ends.max) &&
+        !roundsToOther(min, ends.min, ends.max) &&
+        !roundsToOther(max, ends.max, ends.min))
+    ) {
       return ends;
     }
     for (let decimals = SHORT_TIER_ROUNDING + 1; decimals <= MAX_RESTORED_DECIMALS; decimals += 1) {
@@ -945,6 +984,30 @@
   // "Consistently" is not said when the single biggest step against the direction is more than this share of the range: a climb of
   // 100 that gives back 70 in one step is not consistent.
   const CONSISTENT_STEP_AGAINST_SHARE = 0.25;
+  // A mostly level series whose points off its level are more than this share of all its points is not "mostly level": a wide
+  // square wave is 43% off its level and a plateau holds 33%.
+  const LEVEL_APART_MAX_POINT_SHARE = 0.4;
+  // A point counts as raised or lowered when it is further than this share of the range from the series' level.
+  const LEVEL_APART_MIN_SHARE = 0.25;
+
+  /**
+   * The value that most points hold (the first of those, where several tie): the level of a mostly level series.
+   * @param {Array<number>} values - The series values in source order
+   * @returns {number} The level
+   */
+  function levelOf(values) {
+    const counts = new Map();
+    for (const value of values) counts.set(value, (counts.get(value) || 0) + 1);
+    let level = values[0];
+    let most = 0;
+    for (const [value, count] of counts) {
+      if (count > most) {
+        most = count;
+        level = value;
+      }
+    }
+    return level;
+  }
 
   /**
    * How many separate stretches of points the test holds for.
@@ -964,21 +1027,31 @@
   }
 
   /**
-   * The words for a mostly level series with a large range where no single spike or dip fits: the side with fewer
-   * points is the one that stands apart.
+   * The words for a mostly level series with a large range where no single spike or dip fits. More than
+   * LEVEL_APART_MAX_POINT_SHARE of the points off the level is not "mostly level" (no clear trend); points that stand apart both
+   * ways say so; otherwise the side with fewer points is the one that stands apart, and several one-point stretches are points.
    * @param {Array<number>} values - The series values in source order
    * @param {number} high - The highest value
    * @param {number} low - The lowest value
    * @returns {string} A TRENDS member
    */
   function levelFallbackTrend(values, high, low) {
+    const level = levelOf(values);
+    if (values.filter((value) => value !== level).length > LEVEL_APART_MAX_POINT_SHARE * values.length) return TRENDS.NONE;
+    const margin = LEVEL_APART_MIN_SHARE * (high - low);
+    if (values.some((value) => value - level > margin) && values.some((value) => level - value > margin)) return TRENDS.LEVEL_APART;
+
     const midpoint = (high + low) / 2;
     const above = (value) => value > midpoint;
     const below = (value) => value < midpoint;
     const raised = values.filter(above).length <= values.filter(below).length;
-    const stretches = countStretches(values, raised ? above : below);
-    if (raised) return stretches === 1 ? TRENDS.LEVEL_RAISED : TRENDS.LEVEL_RAISED_MANY;
-    return stretches === 1 ? TRENDS.LEVEL_LOWERED : TRENDS.LEVEL_LOWERED_MANY;
+    const farSide = raised ? above : below;
+    const stretches = countStretches(values, farSide);
+    if (stretches === 1) return raised ? TRENDS.LEVEL_RAISED : TRENDS.LEVEL_LOWERED;
+    // Every stretch one point long: a run of values it is not.
+    const oneEach = values.filter(farSide).length === stretches;
+    if (oneEach) return raised ? TRENDS.LEVEL_RAISED_POINTS : TRENDS.LEVEL_LOWERED_POINTS;
+    return raised ? TRENDS.LEVEL_RAISED_MANY : TRENDS.LEVEL_LOWERED_MANY;
   }
 
   /**
@@ -1119,6 +1192,20 @@
       if (values[i] < values[i - 1] && values[i] < values[i + 1]) troughs += 1;
     }
     return { peaks: peaks, troughs: troughs };
+  }
+
+  /**
+   * The words that say the highest value sits on an end point, which the peak count leaves out (an end point has one neighbour).
+   * Without them "peaks at 100 during L4, L7 and L13" is followed by "two peaks".
+   * @param {Array<number>} values - The series values in source order
+   * @returns {string} "" or ", and it starts at its highest value" and so on
+   */
+  function highestAtEndsClause(values) {
+    const highest = Math.max(...values);
+    const parts = [];
+    if (values[0] === highest) parts.push("starts");
+    if (values[values.length - 1] === highest) parts.push("ends");
+    return parts.length ? `, and it ${parts.join(" and ")} at its highest value` : "";
   }
 
   // How far a step may go against its leg and still count as one rise or one
@@ -1365,7 +1452,7 @@
   // Characters that draw as nothing: white space, Unicode format characters (zero-width space, joiner and the like), the combining
   // grapheme joiner, the Hangul fillers, the braille blank U+2800 and the variation selectors. One class serves every name and every
   // label, so nothing is blank in one place and visible in another.
-  const INVISIBLE_CHARS = String.raw`\s\p{Cf}\p{Default_Ignorable_Code_Point}\u2800`;
+  const INVISIBLE_CHARS = String.raw`\s\p{Cf}\p{Default_Ignorable_Code_Point}\u2800\u001D\u007F`;
   // Characters in the invisible set that Chromium nonetheless draws as ink: U+180F (Mongolian free variation
   // selector four) and the 37 that leave a mark when drawn alone (the Arabic and Syriac number signs, the Ogham space mark, the
   // interlinear annotation anchors, the Kaithi number signs, the Egyptian and shorthand format controls). They are excluded where the
@@ -1380,22 +1467,30 @@
     return typeof series.name === "string" ? repeatKey(series.name) : "";
   }
 
-  // White space and format characters at either end of a label do not change how it sounds or looks.
-  const LABEL_EDGES = new RegExp(`^${INVISIBLE_ONE}+|${INVISIBLE_ONE}+$`, "gu");
-
-  // Inside a name the invisible characters are removed for the repeat key, but not a space, which a reader sees as a gap.
-  // U+FEFF is white space to JavaScript and draws as nothing, so it is removed too.
-  const INVISIBLE_INSIDE = new RegExp(`\\uFEFF|(?!\\s)${INVISIBLE_ONE}`, "gu");
+  // Two invisible characters that change what a name draws, so the repeat key keeps them where they do: a zero-width joiner between two
+  // pictographs (a family of three is not three people side by side) and the tag characters after a pictograph (the flags of England,
+  // Scotland and Wales are tags after a black flag). One at the edge of a name, or beside a letter, is junk and is removed.
+  const KEY_PICTOGRAPH = String.raw`\p{Extended_Pictographic}`;
+  const KEY_TAGS = String.raw`[\u{E0020}-\u{E007F}]`;
+  const KEY_KEPT = String.raw`(?:(?<=${KEY_PICTOGRAPH}️?)‍(?=${KEY_PICTOGRAPH})|(?<=${KEY_PICTOGRAPH}${KEY_TAGS}*)${KEY_TAGS})`;
+  // The repeat key removes every invisible character, at the ends and inside, before the name is composed (NFC), except white space
+  // (a gap a reader sees) and the characters kept above. U+FEFF is white space to JavaScript and draws as nothing, so it goes too.
+  const KEY_INVISIBLE = new RegExp(`\\uFEFF|(?!\\s)(?!${KEY_KEPT})${INVISIBLE_ONE}`, "gu");
+  // White space the picture does not draw as ink (U+1680, the Ogham space mark, is drawn and so stays a character).
+  const KEY_SPACE = String.raw`(?:(?!${DRAWN_MARKS})\s)+`;
+  const KEY_SPACE_EDGES = new RegExp(`^${KEY_SPACE}|${KEY_SPACE}$`, "gu");
+  const KEY_SPACE_RUN = new RegExp(KEY_SPACE, "gu");
 
   /**
-   * The key two names repeat on, so that names which look and sound the same are a repeat: the name is composed one way (NFC), the
-   * invisible characters at its ends and inside it are removed (white space inside is kept, so "New York" and "NewYork" stay two
-   * names), and a no-break space is read as a space. Case and lookalike letters are kept, so "North" and "NORTH" stay two names.
+   * The key two names repeat on, so that names which look and sound the same are a repeat: the invisible characters are removed (bar the
+   * kept ones above), the name is composed one way (NFC), white space at its ends is dropped, and every run of white space inside it
+   * (no-break, thin, em or ideographic space, tab, line break, two spaces) reads as one space, so "New York" and "New  York" are one
+   * name and "New York" and "NewYork" stay two. Case and lookalike letters are kept, so "North" and "NORTH" stay two names.
    * @param {string} name - A segment, axis or series name
    * @returns {string} The key
    */
   function repeatKey(name) {
-    return String(name).normalize("NFC").replace(LABEL_EDGES, "").replace(INVISIBLE_INSIDE, "").replace(/\u00A0/g, " ");
+    return String(name).replace(KEY_INVISIBLE, "").normalize("NFC").replace(KEY_SPACE_EDGES, "").replace(KEY_SPACE_RUN, " ");
   }
 
   /**
@@ -1404,9 +1499,9 @@
    *
    * Compared on the AUTHOR'S OWN text, before escaping, so two labels that
    * differ only in characters an HTML sink would encode are still two labels.
-   * Edge white space and format characters are ignored ("Autumn " repeats
-   * "Autumn"), case and interior characters are not, and a blank label is
-   * never a repeat.
+   * Labels compare on `repeatKey`, as series names do ("Autumn " repeats
+   * "Autumn", "New York" with a no-break space repeats "New York"), case is
+   * not ignored, and a blank label is never a repeat.
    *
    * @param {Object} chart - The adapter's chart
    * @param {number} index - 0-based point index
@@ -1416,10 +1511,10 @@
     const categories = declaredCategories(chart);
     const label = categories[index];
     if (typeof label !== "string") return false;
-    const key = label.replace(LABEL_EDGES, "");
+    const key = repeatKey(label);
     let seen = 0;
     for (const one of categories) {
-      if (typeof one === "string" && !BLANK_LABEL.test(one) && one.replace(LABEL_EDGES, "") === key) seen += 1;
+      if (typeof one === "string" && !BLANK_LABEL.test(one) && repeatKey(one) === key) seen += 1;
       if (seen > 1) return true;
     }
     return false;
@@ -2790,7 +2885,7 @@
       items.push(
         item([
           text(
-            `The data rises and falls repeatedly, with ${countWord(shape.peaks)} peaks and ${countWord(shape.troughs)} troughs.`
+            `The data rises and falls repeatedly, with ${countWord(shape.peaks)} peaks and ${countWord(shape.troughs)} troughs${highestAtEndsClause(series.values)}.`
           ),
         ])
       );
@@ -2944,7 +3039,6 @@
   function valueCount(series) {
     return series.totalValues === undefined ? series.values.length : series.totalValues;
   }
-
   /**
    * One insight per series that holds values past the last label: it names them, with the disclosure.
    * @param {Object} chart - The adapter's chart, whole
@@ -3005,8 +3099,17 @@
     // The figures (range, average, trend, highest and lowest) cover the drawn values only.
     const figures = drawnOnly(chart);
 
+    // The short tier says so when the picture leaves values out, because its figures cover the drawn ones only.
+    const undrawnTotal = figures.series.reduce((sum, one) => sum + valueCount(one) - one.values.length, 0);
+    const undrawnShort =
+      undrawnTotal === 1
+        ? [text(" One further value is written in the code and not drawn.")]
+        : undrawnTotal > 1
+          ? [text(` ${capitalise(countWord(undrawnTotal))} further values are written in the code and not drawn.`)]
+          : [];
     const shortRuns = [
       ...buildShortOpeningRuns(chart, options),
+      ...undrawnShort,
       text(" "),
       ...buildTakeawayRuns(figures, TIERS.SHORT),
     ];
