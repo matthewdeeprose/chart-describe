@@ -223,10 +223,58 @@ test("labels that differ in case are not a repeat", () => {
   assert.equal(lines.some((line) => line.includes("(axis")), false);
 });
 
-test("labels that differ only inside are not a repeat", () => {
+test("labels that differ only in the amount or kind of white space between words are a repeat", () => {
   const lines = radarLines(["Quality  x", "Quality x", "Cost"], [TWO_SUPPLIERS[0]]);
-  assert.equal(axesSentence(lines), 'The axes, clockwise from the top, are "Quality  x", "Quality x" and "Cost".');
-  assert.equal(lines.some((line) => line.includes("(axis")), false);
+  assert.equal(
+    axesSentence(lines),
+    'The axes, clockwise from the top, are "Quality  x" (axis 1), "Quality x" (axis 2) and "Cost".',
+  );
+});
+
+test("repeat key: any white space is one space, invisible characters go before composing, ZWJ and tags are kept", () => {
+  const repeated = (a, b) => {
+    const sentence = axesSentence(radarText({ axisLabels: [a, b, "C"], seriesList: [["S", [1, 2, 3]]] }).lines);
+    return sentence.includes("(axis 1)") && sentence.includes("(axis 2)");
+  };
+  // white space of every kind between words reads as one space
+  assert.ok(repeated("New York", "New York"));
+  assert.ok(repeated("New York", "New York"));
+  assert.ok(repeated("New York", "New\tYork"));
+  assert.ok(repeated("New York", "New York"));
+  // an invisible character between a letter and its accent cannot stop them composing
+  assert.ok(repeated("Café", "Cafe͏́"));
+  // the Ogham space mark draws, so it is not a space
+  assert.ok(!repeated("ab c", "ab c"));
+  // a joiner and tag characters make different emoji and different flags
+  assert.ok(!repeated("\u{1F468}‍\u{1F469}‍\u{1F467}", "\u{1F468}\u{1F469}\u{1F467}"));
+  assert.ok(
+    !repeated(
+      "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}",
+      "\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}",
+    ),
+  );
+  // and names that are the same stay the same, and a joiner at the end is still removed
+  assert.ok(repeated("\u{1F468}‍\u{1F469}", "\u{1F468}‍\u{1F469}‍"));
+});
+
+test("average: a true half at a large magnitude rounds away from zero, and a small magnitude still does", () => {
+  // mean 72603.37725 exactly: a half at four places
+  assert.equal(averageOf([72603.377, 72603.377, 72603.377, 72603.378]), "72603.3773");
+  assert.equal(averageOf([-32079434.49, -32079434.49, -32079434.49, -32079434.48]), "-32079434.488");
+  // must not change
+  assert.equal(averageOf([0.377, 0.377, 0.377, 0.378]), "0.3773");
+  assert.equal(averageOf([10000000.1, 10000000.2, 10000001.2]), "10000001");
+  // not a half: a mean a hair under 0.65 stays under it
+  assert.equal(averageOf([-0.7, -0.7, -0.7, -0.7, -0.7, -0.7, -0.7, -0.7, -0.7, -0.7, -0.7, -0.7, -0.7, -0.7, -0.7, -0.7, -0.7, -0.7, -0.7, 0.30000000000000004]), "-0.6");
+});
+
+test("speed: a chart of 3,200 distinct axes is described without a quadratic scan", () => {
+  const axisLabels = Array.from({ length: 3200 }, (_, i) => `Axis ${i + 1}`);
+  const values = Array.from({ length: 3200 }, (_, i) => (i * 7) % 13);
+  const started = Date.now();
+  radarText({ axisLabels, seriesList: [["S", values]] });
+  // 14 ms measured on the draft and about 6,400 ms before; a bound of two seconds fails the quadratic scan and not a slow machine.
+  assert.ok(Date.now() - started < 2000);
 });
 
 test("a blank axis beside a repeated one keeps its own name and does not join the repeat", () => {
@@ -513,8 +561,8 @@ for (const [name, invisible] of [
   });
 }
 
-test("the C0 and C1 controls and U+180F draw in Chromium, so a label or title of them stays a name", () => {
-  for (const drawn of ["\u0000", "\u0001", "\u007F", "\u0085", "\u180F"]) {
+test("the C0 and C1 controls (bar U+001D and U+007F) and U+180F draw in Chromium, so a label or title of them stays a name", () => {
+  for (const drawn of ["\u0000", "\u0001", "\u0085", "\u180F"]) {
     const shown = JSON.stringify(drawn);
     const text = radarText({ title: drawn, axisLabels: [drawn, "B", "C"], seriesList: [["S", [1, 2, 3]]] });
     assert.ok(!axesSentence(text.lines).includes("unlabelled axis 1"), shown);
@@ -630,4 +678,24 @@ test("the one compensated sum: values that overflow a sum are still refused, and
   assert.throws(() => radarText({ axisLabels: ["A", "B"], seriesList: [["S", [Number.MAX_VALUE, Number.MAX_VALUE]]] }), RangeError);
   // The exact mean is 14 / 5 = 2.8, which sits inside the range and reads as the whole number 3; a plain running sum gives 8 / 5 and reads 2.
   assert.equal(averageOf([1e252, 6, -1e252, 4, 4]), "3");
+});
+
+// U+001D and U+007F draw nothing in Chromium, so they read as no label and no title; U+0001 draws a box and stays a name
+
+test("a label or title of only U+001D or U+007F reads as none, and U+0001 is still a name", () => {
+  for (const blank of ["\u001D", "\u007F"]) {
+    const shown = JSON.stringify(blank);
+    const text = radarText({ title: blank, axisLabels: [blank, "B", "C"], seriesList: [["S", [1, 2, 3]]] });
+    assert.ok(axesSentence(text.lines).includes("unlabelled axis 1"), shown);
+    assert.equal(text.short, "A radar chart with three axes and one series.", shown);
+  }
+  const named = radarText({ title: "\u0001", axisLabels: ["\u0001", "B", "C"], seriesList: [["S", [1, 2, 3]]] });
+  assert.ok(named.short.includes("titled"));
+  assert.ok(!axesSentence(named.lines).includes("unlabelled axis 1"));
+});
+
+// Round 6, register 84: the finite guard in compensatedSum is live, so a test pins it. Without it an infinite value reads NaN.
+test("compensated sum: an infinite value reads about Infinity, never NaN", () => {
+  assert.equal(seriesLine([Infinity, 1, 2]), "1. \"S\", averaging about Infinity. Highest on \"Axis1\", lowest on \"Axis2\".");
+  assert.ok(!seriesLine([-Infinity, 1, 2]).includes("NaN"));
 });

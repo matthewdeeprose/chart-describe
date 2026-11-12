@@ -287,7 +287,7 @@
   // and the Braille blank U+2800 (which is not default-ignorable). The C0 and C1 controls and U+180F are NOT in the set:
   // Chromium draws or advances them, and U+180F is excluded by lookahead below. ONE
   // class serves every name and every title, so no name is blank in one place and visible in another.
-  const INVISIBLE_CHARS = String.raw`\s\p{Cf}\p{Default_Ignorable_Code_Point}\u2800`;
+  const INVISIBLE_CHARS = String.raw`\s\p{Cf}\p{Default_Ignorable_Code_Point}\u2800\u001D\u007F`;
   // Characters in the invisible set that Chromium nonetheless draws as ink: U+180F (Mongolian free variation
   // selector four) and the 37 that leave a mark when drawn alone (the Arabic and Syriac number signs, the Ogham space mark, the
   // interlinear annotation anchors, the Kaithi number signs, the Egyptian and shorthand format controls). They are excluded where the
@@ -364,19 +364,53 @@
   /** Characters that draw as nothing, at either end of a label. */
   const LABEL_EDGES = new RegExp(`^${INVISIBLE_ONE}+|${INVISIBLE_ONE}+$`, "gu");
 
-  // Inside a name the invisible characters are removed for the repeat key, but not a space, which a reader sees as a gap.
-  // U+FEFF is white space to JavaScript and draws as nothing, so it is removed too.
-  const INVISIBLE_INSIDE = new RegExp(`\\uFEFF|(?!\\s)${INVISIBLE_ONE}`, "gu");
+  // Two invisible characters that change what a name draws, so the repeat key keeps them where they do: a zero-width joiner between two
+  // pictographs (a family of three is not three people side by side) and the tag characters after a pictograph (the flags of England,
+  // Scotland and Wales are tags after a black flag). One at the edge of a name, or beside a letter, is junk and is removed.
+  const KEY_PICTOGRAPH = String.raw`\p{Extended_Pictographic}`;
+  const KEY_TAGS = String.raw`[\u{E0020}-\u{E007F}]`;
+  const KEY_KEPT = String.raw`(?:(?<=${KEY_PICTOGRAPH}️?)‍(?=${KEY_PICTOGRAPH})|(?<=${KEY_PICTOGRAPH}${KEY_TAGS}*)${KEY_TAGS})`;
+  // The repeat key removes every invisible character, at the ends and inside, before the name is composed (NFC), except white space
+  // (a gap a reader sees) and the characters kept above. U+FEFF is white space to JavaScript and draws as nothing, so it goes too.
+  const KEY_INVISIBLE = new RegExp(`\\uFEFF|(?!\\s)(?!${KEY_KEPT})${INVISIBLE_ONE}`, "gu");
+  // White space the picture does not draw as ink (U+1680, the Ogham space mark, is drawn and so stays a character).
+  const KEY_SPACE = String.raw`(?:(?!${DRAWN_MARKS})\s)+`;
+  const KEY_SPACE_EDGES = new RegExp(`^${KEY_SPACE}|${KEY_SPACE}$`, "gu");
+  const KEY_SPACE_RUN = new RegExp(KEY_SPACE, "gu");
 
   /**
-   * The key two names repeat on, so that names which look and sound the same are a repeat: the name is composed one way (NFC), the
-   * invisible characters at its ends and inside it are removed (white space inside is kept, so "New York" and "NewYork" stay two
-   * names), and a no-break space is read as a space. Case and lookalike letters are kept, so "North" and "NORTH" stay two names.
+   * The key two names repeat on, so that names which look and sound the same are a repeat: the invisible characters are removed (bar the
+   * kept ones above), the name is composed one way (NFC), white space at its ends is dropped, and every run of white space inside it
+   * (no-break, thin, em or ideographic space, tab, line break, two spaces) reads as one space, so "New York" and "New  York" are one
+   * name and "New York" and "NewYork" stay two. Case and lookalike letters are kept, so "North" and "NORTH" stay two names.
    * @param {string} name - A segment, axis or series name
    * @returns {string} The key
    */
   function repeatKey(name) {
-    return String(name).normalize("NFC").replace(LABEL_EDGES, "").replace(INVISIBLE_INSIDE, "").replace(/\u00A0/g, " ");
+    return String(name).replace(KEY_INVISIBLE, "").normalize("NFC").replace(KEY_SPACE_EDGES, "").replace(KEY_SPACE_RUN, " ");
+  }
+
+  // The repeated keys of a list of axes or series, worked out once for each list: a name is looked up in the set, not compared with
+  // every other name. The list is a fixed delivery, so its answer is kept for as long as the list lives (and for the same length).
+  const REPEATED_KEYS = new WeakMap();
+
+  /**
+   * The keys that more than one labelled item carries. An unlabelled item never counts.
+   * @param {Object[]} items - The delivered axes, or the delivered series
+   * @returns {Set<string>} The repeated keys
+   */
+  function repeatedKeysOf(items) {
+    const kept = REPEATED_KEYS.get(items);
+    if (kept && kept.length === items.length) return kept.repeated;
+    const counts = new Map();
+    for (const one of items) {
+      if (isUnlabelled(one.label)) continue;
+      const key = repeatKey(one.label);
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    const repeated = new Set([...counts].filter(([, count]) => count > 1).map(([key]) => key));
+    REPEATED_KEYS.set(items, { length: items.length, repeated });
+    return repeated;
   }
 
   /**
@@ -393,8 +427,7 @@
   function isRepeatedAxisLabel(axes, index) {
     const label = axes[index].label;
     if (isUnlabelled(label)) return false;
-    const key = repeatKey(label);
-    return axes.filter((one) => !isUnlabelled(one.label) && repeatKey(one.label) === key).length > 1;
+    return repeatedKeysOf(axes).has(repeatKey(label));
   }
 
   /** The position that tells repeated axes apart: " (axis 2)". */
@@ -431,8 +464,7 @@
    */
   function isRepeatedSeriesLabel(facts, curve) {
     if (isUnlabelled(curve.label)) return false;
-    const key = repeatKey(curve.label);
-    return facts.curves.filter((one) => !isUnlabelled(one.label) && repeatKey(one.label) === key).length > 1;
+    return repeatedKeysOf(facts.curves).has(repeatKey(curve.label));
   }
 
   /** The position that tells repeated series apart: " (series 2)". */
@@ -803,6 +835,51 @@
   }
 
   /**
+   * The mean of finite values as an exact fraction, read from each value's shortest round-trip text, so
+   * a half is found by arithmetic and never by a tolerance on a binary sum.
+   *
+   * @param {number[]} values - A series' values
+   * @returns {?{sum: bigint, denominator: bigint}} The sum over the denominator (the count times ten to
+   *   the power of the finest place), or null when a value is not finite
+   */
+  function exactMeanOf(values) {
+    if (!values.every(Number.isFinite)) return null;
+    const parts = values.map((value) => {
+      const match = NUMBER_TEXT_PATTERN.exec(String(Math.abs(value)));
+      if (!match) return null;
+      const [whole, fraction = ""] = String(Math.abs(value)).split("e")[0].split(".");
+      const exponent = match[2] ? Number(match[2]) : 0;
+      // The digits as a whole number and the places they sit behind the point.
+      const digits = BigInt(whole + fraction);
+      const places = fraction.length - exponent;
+      return { digits: value < 0 ? -digits : digits, places };
+    });
+    if (parts.some((part) => part === null)) return null;
+    const finest = Math.max(0, ...parts.map((part) => part.places));
+    const sum = parts.reduce(
+      (total, part) => total + part.digits * 10n ** BigInt(finest - part.places),
+      0n
+    );
+    return { sum, denominator: BigInt(values.length) * 10n ** BigInt(finest) };
+  }
+
+  /**
+   * An exact mean rounded to a count of decimal places, halves away from zero.
+   * @param {{sum: bigint, denominator: bigint}} exactMean - From `exactMeanOf`
+   * @param {number} places - Decimal places to keep
+   * @returns {number} The rounded mean (0 for -0)
+   */
+  function roundExactMean(exactMean, places) {
+    const negative = exactMean.sum < 0n;
+    const magnitude = negative ? -exactMean.sum : exactMean.sum;
+    const scaled = magnitude * 10n ** BigInt(places);
+    // floor((2 * scaled + denominator) / (2 * denominator)): a half goes up on the magnitude.
+    const whole = (scaled * 2n + exactMean.denominator) / (exactMean.denominator * 2n);
+    const rounded = Number(`${negative ? "-" : ""}${whole}e-${places}`);
+    return rounded === 0 ? 0 : rounded;
+  }
+
+  /**
    * The search that `roundedMean` documents, with its result and whether it ran out of places.
    *
    * @param {number[]} values - A series' values
@@ -826,9 +903,10 @@
     // search (a series of the smallest numbers has 324 places).
     let rounded = 0;
     let firstInside = null;
+    const exactMean = exactMeanOf(values);
     for (let places = 0; places <= lastPlaces + EXTRA_PLACES_ON_EXTREME; places += 1) {
       if (!Number.isFinite(10 ** places)) break;
-      rounded = roundHalfAwayFromZero(mean, places);
+      rounded = exactMean ? roundExactMean(exactMean, places) : roundHalfAwayFromZero(mean, places);
       if (rounded < lowest || rounded > highest) continue;
       if (firstInside === null) firstInside = rounded;
       // The mean of values that differ lies strictly between the lowest and the highest, so a figure
