@@ -822,6 +822,30 @@ test("38: an infinite value reads an infinite total, not NaN", () => {
   assert.ok(describe("", [["A", Infinity], ["B", 1]]).detailed.includes("• Total: Infinity"));
 });
 
+// Rule 39: a decimal share is "exactly" a half, a third or a quarter only when it is, worked out from the written digits
+
+const proportionOf = (pairs) => /representing (.+?) of the total/.exec(describe("", pairs).short)?.[1];
+
+test("39a: a decimal share a hair over a fraction reads about it, in either order", () => {
+  assert.equal(proportionOf([["A", 50.0000000001], ["B", 49.9999999999]]), "about half");
+  assert.equal(proportionOf([["B", 49.9999999999], ["A", 50.0000000001]]), "about half");
+  assert.equal(proportionOf([["A", 33.3333333334], ["B", 33.3333333333], ["C", 33.3333333333]]), "about a third");
+  assert.equal(proportionOf([["A", 25.0000000001], ["B", 24.9999999999], ["C", 24.9999999999], ["D", 24.9999999999], ["E", 0.0000000002]]), "about a quarter");
+});
+
+test("39b: a decimal share that is exactly a fraction still reads exactly", () => {
+  assert.equal(proportionOf([["A", 0.1], ["B", 0.2], ["C", 0.3]]), "exactly half");
+  assert.equal(proportionOf([["A", 1.5], ["B", 0.75], ["C", 0.75]]), "exactly half");
+  assert.equal(proportionOf([["A", 0.3], ["B", 0.2], ["C", 0.2], ["D", 0.2]]), "exactly a third");
+  assert.equal(proportionOf([["A", 0.2], ["B", 0.15], ["C", 0.15], ["D", 0.15], ["E", 0.15]]), "exactly a quarter");
+  assert.equal(proportionOf([["A", 1.5], ["B", 1], ["C", 0.5]]), "exactly half");
+});
+
+test("39c: values of more than sixteen digits keep the tolerance", () => {
+  assert.equal(proportionOf([["A", 0.30000000000000004], ["B", 0.1], ["C", 0.1], ["D", 0.1]]), "exactly half");
+  assert.equal(proportionOf([["A", 0.12345678901234567], ["B", 0.06172839450617284], ["C", 0.06172839450617284]]), "exactly half");
+});
+
 // U+001D and U+007F draw nothing in Chromium, so they read as no name and no title; U+0001 draws a box and stays a name
 
 test("a title or a name of only U+001D or U+007F reads as none, and U+0001 is still a name", () => {

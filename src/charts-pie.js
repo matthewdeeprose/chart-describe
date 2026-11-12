@@ -316,17 +316,41 @@
   }
 
   /**
-   * The phrase for the largest share, tested on the UNROUNDED fraction.
-   * "exactly" when within tolerance of the fraction, "over" only above it.
+   * True when a decimal value is exactly one part in `denominator` of the exact decimal total, both worked out from their
+   * written digits as whole numbers of the finest place. Null when either is not plain digits, so the caller keeps the tolerance.
+   * @param {number} value - The segment value
+   * @param {string|null} exactTotal - The total from exactDecimalTotal, or null
+   * @param {number} denominator - 2, 3 or 4
+   * @returns {boolean|null} The exact answer, or null when there is none
    */
-  function proportionPhrase(value, total) {
+  function decimalShareIs(value, exactTotal, denominator) {
+    if (exactTotal === null) return null;
+    const one = /^(\d+)(?:\.(\d+))?$/.exec(formatValue(value));
+    const all = /^(\d+)(?:\.(\d+))?$/.exec(exactTotal);
+    if (!one || !all) return null;
+    const places = Math.max((one[2] || "").length, (all[2] || "").length);
+    const scaled = (match) => BigInt(match[1] + (match[2] || "").padEnd(places, "0"));
+    return scaled(one) * BigInt(denominator) === scaled(all);
+  }
+
+  /**
+   * The phrase for the largest share, tested on the UNROUNDED fraction.
+   * "exactly" when the share is that fraction, "over" only above it. Whole numbers and decimals of sixteen digits or
+   * fewer are tested exactly; anything longer keeps the tolerance.
+   * @param {number} value - The largest segment's value
+   * @param {number} total - The total as a number
+   * @param {string|null} [exactTotal] - The total as exact decimal text (exactDecimalTotal), or null
+   */
+  function proportionPhrase(value, total, exactTotal = null) {
     const fraction = value / total;
     // Two whole numbers that a double holds exactly carry no float noise, so their share is tested exactly.
     const exact = Number.isSafeInteger(value) && Number.isSafeInteger(total);
-    const near = (target) =>
-      exact
-        ? value * Math.round(1 / target) === total
-        : Math.abs(fraction - target) <= FRACTION_TOLERANCE;
+    const near = (target) => {
+      const denominator = Math.round(1 / target);
+      if (exact) return value * denominator === total;
+      const decimal = decimalShareIs(value, exactTotal, denominator);
+      return decimal === null ? Math.abs(fraction - target) <= FRACTION_TOLERANCE : decimal;
+    };
     // The share as the reader hears it: the one the row prints, rounded the same way (halves away from zero). One that prints as a
     // simple fraction without being it reads "about", so "50.0%" never sits beside "over half", nor "25.0%" beside nothing.
     const printed = roundedShare(value, total).toFixed(1);
@@ -630,7 +654,7 @@
       ];
     }
 
-    const proportion = proportionPhrase(largest.value, total);
+    const proportion = proportionPhrase(largest.value, total, exactDecimalTotal(segments));
     return [
       segmentLabel(largest, { opening: true }),
       text(" is the largest segment at "),
