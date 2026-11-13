@@ -114,7 +114,9 @@ const AVERAGE_ROWS = [
     name: "two values that differ at the fifth decimal are not both about 1.00",
     input: LEVEL([1.00411, 1.00413]),
     range: "1.00411 to 1.00413",
-    shortRange: "about 1.00411 to about 1.00413",
+    // Both ends round to 1.00 alike, so they are written to five decimals; those digits are the typed values, so neither is "about".
+    // (This row used to read "about 1.00411 to about 1.00413": the word was kept for ends that had rounded alike, though the digits were exact.)
+    shortRange: "1.00411 to 1.00413",
     average: "1.00412",
   },
 ];
@@ -572,8 +574,11 @@ test("averages that differ at the thirteenth figure are not the same average", (
     bar("South", [1000000000000.4, 1000000000000.4]),
   ]);
   assert.equal(describe(near).short, 'A bar chart for two categories. The "North" series shows the highest overall values.');
+  // A computed 0.1 + 0.2 is the double 0.30000000000000004, whose written digits are not 0.3, so it reads as higher than a typed 0.3.
   const noise = chart(band(null, ["A", "B", "C"]), [bar("North", [0.1 + 0.2, 0.3, 0.3]), bar("South", [0.3, 0.3, 0.3])]);
-  assert.equal(describe(noise).short, "A bar chart for three categories. The series have the same average.");
+  assert.equal(describe(noise).short, 'A bar chart for three categories. The "North" series shows the highest overall values.');
+  const typed = chart(band(null, ["A", "B", "C"]), [bar("North", [0.3, 0.3, 0.3]), bar("South", [0.3, 0.3, 0.3])]);
+  assert.equal(describe(typed).short, "A bar chart for three categories. The series have the same average.");
 });
 
 test("a series with no values is refused, not described as undefined", () => {
@@ -758,8 +763,11 @@ test("same average: means that differ are not called the same, float noise still
   assert.equal(apart.short, 'A bar chart for two categories. The "South" series shows the highest overall values.');
   const near = describe(chart(band(null, ["x", "y"]), [bar("North", [1e13, 1e13]), bar("South", [1e13 + 0.05, 1e13 + 0.05])]));
   assert.equal(near.short, 'A bar chart for two categories. The "South" series shows the highest overall values.');
+  // A computed 0.1 + 0.2 is written 0.30000000000000004, so the South series reads as higher than a typed 0.3.
   const noise = describe(chart(band(null, ["x", "y"]), [bar("North", [0.3, 0.3]), bar("South", [0.1 + 0.2, 0.1 + 0.2])]));
-  assert.equal(noise.short, "A bar chart for two categories. The series have the same average.");
+  assert.equal(noise.short, 'A bar chart for two categories. The "South" series shows the highest overall values.');
+  const typed = describe(chart(band(null, ["x", "y"]), [bar("North", [0.3, 0.3]), bar("South", [0.3, 0.3])]));
+  assert.equal(typed.short, "A bar chart for two categories. The series have the same average.");
 });
 
 test("spread: data that varies never has a spread spoken as zero, however small", () => {
@@ -889,8 +897,9 @@ test("means that differ are not the same average at a large count or scale", () 
   // Just on the other side: identical series, and means that differ only by decimal noise, are still the same average.
   const same = describe(chart(band(null, label(100)), [line("A", repeatValue(0.1, 100)), bar("B", repeatValue(0.1, 100))]));
   assert.ok(same.short.endsWith("The series have the same average."));
+  // The same pair as above, read from the digits a computed 0.1 + 0.2 is written with: the South series is higher.
   const noise = describe(chart(band(null, ["x", "y"]), [bar("North", [0.3, 0.3]), bar("South", [0.1 + 0.2, 0.1 + 0.2])]));
-  assert.ok(noise.short.endsWith("The series have the same average."));
+  assert.ok(noise.short.endsWith('The "South" series shows the highest overall values.'));
 });
 
 test("an average that equals an end in doubles is spoken in full, not as a rounded figure outside the range", () => {
@@ -1087,9 +1096,13 @@ test("mostly level: points that stand apart both ways say so, and too many point
   const trend = (values) => describe(chart(band(null, label(values.length)), [line("S", values)])).lines.find((text) => text.includes("mostly level") || text.includes("no clear trend"));
   // Four raised points and three lowered: the sentence used to name only the lowered stretch.
   assert.equal(trend([5, 5, 10, 10, 10, 10, 5, 5, 0, 0, 0, 5, 5, 5, 5, 5]), '• The "S" series fluctuates with no clear trend.');
-  // One raised point and one lowered point, level at the midpoint: both sides are named.
-  assert.equal(trend([0, 5, 5, 5, 10, 5, 5, 5, 5, 5, 5, 5]), '• The "S" series is mostly level, apart from raised and lowered stretches.');
+  // One raised point and one lowered point, level at the midpoint: both sides are named, and single points are points.
+  assert.equal(trend([0, 5, 5, 5, 10, 5, 5, 5, 5, 5, 5, 5]), '• The "S" series is mostly level, apart from raised and lowered points.');
+  // Runs on both sides stay stretches.
   assert.equal(trend([5, 5, 5, 10, 10, 5, 5, 5, 0, 0, 5, 5, 5, 5, 5, 5]), '• The "S" series is mostly level, apart from raised and lowered stretches.');
+  // A run on one side and single points on the other: each side says its own.
+  assert.equal(trend([5, 5, 5, 10, 10, 5, 5, 5, 0, 5, 5, 5, 5, 5, 5, 5]), '• The "S" series is mostly level, apart from raised stretches and lowered points.');
+  assert.equal(trend([5, 5, 5, 10, 5, 5, 5, 0, 0, 5, 5, 5, 5, 5, 5, 5]), '• The "S" series is mostly level, apart from raised points and lowered stretches.');
   // A wide square wave holds 43% of its points off its level: not "apart from raised stretches".
   const wave = [];
   for (let block = 0; block < 7; block += 1) for (let i = 0; i < 5; i += 1) wave.push(block % 2 ? 10 : 0);
@@ -1097,6 +1110,15 @@ test("mostly level: points that stand apart both ways say so, and too many point
   // Just on the other side: 35% (seven of twenty) and one side only keep their sentence.
   assert.equal(trend([2, 2, 2, 6, 6, 6, 6, 2, 2, 2, 2, 2, 2, 6, 6, 6, 2, 2, 2, 2]), '• The "S" series is mostly level, apart from raised stretches.');
   assert.equal(trend([1, 1, 1, 1, 9, 9, 9, 9, 1, 1, 1, 1]), '• The "S" series is mostly level, apart from a raised stretch.');
+});
+
+test("range ends: two ends rounded to the step that lie closer than the step are written to the decimals that show it",() => {
+  const range = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).short;
+  assert.ok(range([1.0049999, 1.0050001]).includes("Values range from 1.0049999 to 1.0050001 "));
+  assert.ok(range([9.9949999, 9.9950001]).includes("Values range from 9.9949999 to 9.9950001 "));
+  // The boundary: ends a full step or more apart keep their rounding.
+  assert.ok(range([1, 1.0050001]).includes("from 1 to about 1.01"));
+  assert.ok(range([1.0049999, 1.0150001]).includes("from about 1.00 to about 1.02"));
 });
 
 test("range ends: a rounded end is not left beside a longer end it would round to", () => {
@@ -1140,10 +1162,158 @@ test("repeat: the Ogham space mark draws as ink, so a name ending in it is not a
   assert.equal(row, `Category | A | A${ogham}`);
 });
 
-test("compensated sum: a sum that overflows stays Infinity and is never NaN", () => {
-  const out = describe(chart(band(null, label(2)), [bar("S", [1.7e308, 1.7e308])]));
-  assert.ok(out.lines.includes("• Average value: Infinity."), out.lines.join(" | "));
-  assert.ok(!out.lines.some((text) => text.includes("NaN")));
+test("a finite series whose compensated sum would overflow has a finite mean; a value that is not finite keeps today's reading", () => {
+  const average = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).lines.find((text) => text.startsWith("• Average value:"));
+  // Every finite series is added exactly, so 1.7e308 + 1.7e308 + 0.5 does not overflow (a compensated sum read Infinity).
+  assert.match(average([1.7e308, 1.7e308, 0.5]), /^• Average value: 113333333333333(0{294})\.$/);
+  // An Infinity or a NaN is outside the stated input and describe() turns it into null, so it is handed to the library directly: it keeps the
+  // compensated sum and the noise bound exactly as before (an Infinity reads as an average of 0, a NaN as NaN).
+  const direct = (values) => lib.render.renderText(lib.charts.buildXychartModel(chart(band(null, label(values.length)), [bar("S", values)]))).detailed;
+  assert.ok(direct([1, Infinity, 3]).includes("• Average value: 0."));
+  assert.ok(direct([1, NaN, 3]).includes("• Average value: NaN."));
+});
+
+// A series of whole numbers is added as big integers; its average and its comparisons are exact.
+
+test("whole-number series whose exact means differ by one in the last figure are not the same average", () => {
+  const two = (a, b) => describe(chart(band(null, label(a.length)), [bar("N", a), line("M", b)])).lines.join(" | ");
+  assert.ok(two([1e16, 1], [1e16, 0]).includes('The "N" series shows the highest overall values.'));
+  assert.ok(two([8000000000000001, 8e15, 8e15], [8e15, 8e15, 8e15]).includes('The "N" series shows the highest overall values.'));
+  // The boundaries that must not move.
+  assert.ok(two([1, 2, 3], [3, 2, 1]).includes("The series have the same average."));
+  assert.ok(two([1e16, 1, 1, -1e16], [1e16, 1, 1, -1e16]).includes("The series have the same average."));
+  assert.ok(two([1e16, 1e16], [1e16, 1e16]).includes("The series have the same average."));
+});
+
+test("a whole series against a series with a decimal is compared exactly (mean 1 against mean 1.2 are not the same)", () => {
+  const out = describe(chart(band(null, label(3)), [bar("N", [1e16, 3, -1e16]), line("M", [1.5, 1.5, 0.6])])).lines.join(" | ");
+  assert.ok(out.includes('The "M" series shows the highest overall values.'), out);
+});
+
+test("a whole-number average is the exact one, however large the values and however much cancels", () => {
+  const average = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).lines.find((text) => text.startsWith("• Average value:"));
+  // The exact mean is 1e200 / 3: 200 digits, spoken to the 15 figures a derived whole number keeps.
+  assert.match(average([1e300, 1e200, -1e300]), /^• Average value: 333333333333333(0{185})\.$/);
+  assert.equal(average([1e16, 1, 1, -1e16]), "• Average value: 0.5.");
+});
+
+// Every finite value is added exactly from the digits it is written with, so a decimal beside a huge whole number is compared and
+// averaged exactly. A series with no decimal places is the whole-number case above.
+
+test("a decimal beside a huge whole number is compared exactly, past 16 digits, with no cap", () => {
+  const two = (a, b) => describe(chart(band(null, label(a.length)), [bar("N", a), line("M", b)])).lines.join(" | ");
+  // The exact means are 5000000000000000.25 and 5000000000000000.125: 18 digits in the sums.
+  assert.ok(two([1e16, 0.5], [1e16, 0.25]).includes('The "N" series shows the highest overall values.'));
+  assert.ok(two([2e16, 0.5], [2e16, 0.25]).includes('The "N" series shows the highest overall values.'));
+  assert.ok(two([1e16, 0.25], [1e16, 0.5]).includes('The "M" series shows the highest overall values.'));
+  // The boundaries that must not move.
+  assert.ok(two([1e16, 0.5], [1e16, 0.5]).includes("The series have the same average."));
+  assert.ok(two([0.1, 0.2], [0.2, 0.1]).includes("The series have the same average."));
+});
+
+test("a mean is the exact one from the written digits, however a value is written", () => {
+  const average = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).lines.find((text) => text.startsWith("• Average value:"));
+  assert.equal(average([0.1, 0.2, -0.3]), "• Average value: 0.");
+  // The exact mean is 0.5 (it was read as 0 before).
+  assert.equal(average([1e16, 1, 1, -1e16, 0.5]), "• Average value: 0.5.");
+  // Exponent form: 1e-7 and 3e-7 average 2e-7, which the number rules give as 0.0000002.
+  assert.equal(average([1e-7, 3e-7]), "• Average value: 0.0000002.");
+  // The documented noise bound of rounds 5 and 6 is gone for finite input: a real mean of 1 / 3 x 1e-16 is spoken, not swallowed.
+  assert.match(average([1, -1, 1e-16]), /^• Average value: 0\.000000000000000033/);
+});
+
+// A printed mean whose exact value is a decimal tie rounds half away from zero, read from the exact sum and never from the double: 0.545 is
+// stored a hair above its tie and reads 0.55, 0.075 and 1.005 are stored a hair below theirs and read 0.08 and 1.01, as hand arithmetic does.
+
+const average = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).lines.find((text) => text.startsWith("• Average value:"));
+const EIGHT_VALUES = [-0.3, 0.5, 1, -0.5, 0.8, -0.4, -1, 0.5]; // exact mean 0.075
+const NINE_VALUES = [96.63, -90.74, 55.22, 47.64, 30.34, 56.08, -92.73, 97.85, 2.66]; // exact mean 22.55
+
+test("tie: an exact decimal tie in a mean rounds half away from zero, whichever side of the tie its double lies", () => {
+  // 0.545: the double is a hair above the tie.
+  assert.equal(average([6.63, -5.54]), "• Average value: 0.55.");
+  assert.equal(average([-6.63, 5.54]), "• Average value: -0.55.");
+  // 0.075: the double is a hair below the tie.
+  assert.equal(average(EIGHT_VALUES), "• Average value: 0.08.");
+  assert.equal(average(EIGHT_VALUES.map((value) => -value)), "• Average value: -0.08.");
+  // 22.55 reads to one decimal from 10 up; the double is a hair above the tie.
+  assert.equal(average(NINE_VALUES), "• Average value: 22.6.");
+  assert.equal(average(NINE_VALUES.map((value) => -value)), "• Average value: -22.6.");
+  // 1.005: the double is a hair below the tie.
+  assert.equal(average([2.01, 0]), "• Average value: 1.01.");
+  assert.equal(average([-2.01, 0]), "• Average value: -1.01.");
+  // The short tier says the same figure.
+  assert.ok(describe(chart(band(null, label(2)), [bar("S", [0.95, 1.06])])).short.includes("Values range from 0.95 to 1.06 with an average of 1.01."));
+});
+
+test("tie: a mean a hair either side of a tie reads as its own digits", () => {
+  assert.equal(average([6.629, -5.54]), "• Average value: 0.54."); // 0.5445
+  assert.equal(average([6.631, -5.54]), "• Average value: 0.55."); // 0.5455
+  assert.equal(average([...EIGHT_VALUES.slice(0, 7), 0.49]), "• Average value: 0.07."); // 0.07375
+  assert.equal(average([...EIGHT_VALUES.slice(0, 7), 0.51]), "• Average value: 0.08."); // 0.07625
+  assert.equal(average([4.62, 0]), "• Average value: 2.31.");
+});
+
+test("tie: the rule holds where the sentence changes its precision and where decimals are restored", () => {
+  // 9.995 reads to two decimals (below 10) and the tie goes up to 10, which lies inside the range 9.9 to 10.09.
+  assert.equal(average([9.9, 10.09]), "• Average value: 10.");
+  // 99.95 reads to one decimal (below 100) and the tie goes up to 100; 100.5 reads to none and goes up to 101.
+  assert.equal(average([99, 100.9]), "• Average value: 100.");
+  assert.equal(average([99, 102]), "• Average value: 101.");
+  // A mean at the end of its range is written with more decimals until it lies inside, and those decimals round the same way: 0.00015.
+  assert.equal(average([0.0003, 0]), "• Average value: 0.0002.");
+  assert.equal(average([-0.0003, 0]), "• Average value: -0.0002.");
+  // 0.000125 is not a tie at four decimals (it is 1.25 of them), so it rounds down.
+  assert.equal(average([0.00025, 0]), "• Average value: 0.0001.");
+});
+
+// The same rule at the other places a typed value is rounded for print: an end of the range in the short tier, and the median (a typed value
+// or the mean of the two in the middle).
+
+test("tie: a range end typed to a tie reads half away from zero in the short tier", () => {
+  const short = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).short;
+  // 0.00165 is stored a hair below its tie and reads to two figures as 0.0017.
+  assert.ok(short([0.00165, 0.00175]).includes("Values range from about 0.0017 to about 0.0018 with an average of 0.0017."));
+  assert.ok(short([-0.00165, -0.00175]).includes("Values range from about -0.0018 to about -0.0017 with an average of -0.0017."));
+  // Either side of the tie reads as its own digits.
+  assert.ok(short([0.00164, 0.00175]).includes("Values range from about 0.0016 to about 0.0018"));
+  assert.ok(short([0.00166, 0.00175]).includes("Values range from about 0.0017 to about 0.0018"));
+});
+
+// An end the short tier writes in full is the typed value, so "about" stays only on an end whose printed digits differ from the typed ones.
+
+test("range ends: an end written in full is the typed value and is not about, whether or not the ends first rounded alike", () => {
+  const short = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).short;
+  // Both ends round to the same 14 decimals, so they are widened to the full 15, and both are exactly what was typed.
+  assert.ok(short([0.123456789012345, 0.123456789012346]).includes("Values range from 0.123456789012345 to 0.123456789012346 with an average of 0.1234567890123455."));
+  // Both ends round alike at two decimals and are written in full to six.
+  assert.ok(short([0.333331, 0.333334]).includes("Values range from 0.333331 to 0.333334 with an average of 0.333333."));
+  // One end is written in full and the other is still rounded: only the rounded one is "about".
+  assert.ok(short([0.12345, 0.123456]).includes("Values range from 0.12345 to about 0.12346 with an average of 0.123453."));
+  // The same for negative values.
+  assert.ok(short([-0.123456789012345, -0.123456789012346]).includes("Values range from -0.123456789012346 to -0.123456789012345 with an average of -0.1234567890123455."));
+  assert.ok(short([-0.12345, -0.123456]).includes("Values range from about -0.12346 to -0.12345 with an average of -0.123453."));
+});
+
+test("range ends: an end whose printed digits differ from the typed value is still about", () => {
+  const short = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).short;
+  assert.ok(short([0.00165, 0.00175]).includes("Values range from about 0.0017 to about 0.0018 with an average of 0.0017."));
+  assert.ok(short([2.7857142857, 4.8]).includes("Values range from about 2.79 to 4.8 with an average of 3.79."));
+  // Two ends that lie closer than the rounding step are written in full, and read as typed.
+  assert.ok(short([1.0049999, 1.0050001]).includes("Values range from 1.0049999 to 1.0050001 with an average of 1.005."));
+  // An end typed to seven decimals is rounded to 1.005, which is not what was typed, so it stays about.
+  assert.ok(short([1, 1.0049999]).includes("Values range from 1 to about 1.005 with an average of 1.002."));
+});
+
+test("tie: a median that is a typed tie, or the mean of the two in the middle, reads half away from zero", () => {
+  const median = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).lines.find((text) => text.startsWith("• Median value:"));
+  // The middle value 0.015 is typed; the middle pair -0.71 and -0.82 averages -0.765.
+  assert.equal(median([0, 0.01, 0.015, 8, 9]), "• Median value: 0.02.");
+  assert.equal(median([0, -0.01, -0.015, -8, -9]), "• Median value: -0.02.");
+  assert.equal(median([0.29, 1.02, -0.85, -0.82, -1.62, -0.71, 1.97, -1.24]), "• Median value: -0.77.");
+  // Either side of the tie.
+  assert.equal(median([0, 0.01, 0.0149, 8, 9]), "• Median value: 0.01.");
+  assert.equal(median([0, 0.01, 0.0151, 8, 9]), "• Median value: 0.02.");
 });
 
 // U+001D and U+007F draw nothing in Chromium, so they read as no name, no category and no title; U+0001 stays a name
