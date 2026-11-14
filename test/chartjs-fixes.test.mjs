@@ -205,3 +205,48 @@ test("an empty label reads as unlabelled, as a label of spaces does; a label tha
   }
   assert.deepEqual(lib.chartjs.describe(config("pie", ["A", 2, "C"])), { supported: false, reason: "non-string-label" });
 });
+
+test("floating bars, keyed object data and a malformed config are each refused for their own cause", () => {
+  const reason = (config) => lib.chartjs.describe(config).reason;
+  // Floating bars: each row is a pair [low, high], not a point.
+  assert.equal(reason(simpleBar([[1, 3], [2, 5], [0, 4]])), "range-data");
+  // Rows that are points keep their reason.
+  assert.equal(reason(simpleBar([{ x: 1, y: 2 }, { x: 2, y: 3 }, { x: 3, y: 4 }])), "point-data");
+  // Keyed object data, with labels, without labels and as a pie, is one cause.
+  assert.equal(reason(simpleBar({ A: 1, B: 2, C: 3 })), "object-data");
+  assert.equal(reason({ type: "bar", data: { datasets: [{ label: "S", data: { A: 1, B: 2, C: 3 } }] } }), "object-data");
+  assert.equal(reason(simplePie({}, { A: 1, B: 2, C: 3 })), "object-data");
+  // A config Chart.js would not draw is refused as invalid, with no JavaScript message in the reason.
+  assert.deepEqual(lib.chartjs.describe({ type: "bar", data: { labels: "ABC", datasets: [{ data: [1, 2, 3] }] } }), { supported: false, reason: "invalid-config" });
+  assert.deepEqual(lib.chartjs.describe({ type: "bar", data: { labels: ["A"], datasets: [null] } }), { supported: false, reason: "invalid-config" });
+  // A fault inside a shared builder keeps its own name and carries no message either.
+  const realCharts = globalThis.ChartDescribeCharts;
+  globalThis.ChartDescribeCharts = { ...realCharts, buildPieModel() { throw new Error("boom"); } };
+  try {
+    assert.deepEqual(lib.chartjs.describe(simplePie({}, [1, 2, 3])), { supported: false, reason: "builder-error" });
+  } finally {
+    globalThis.ChartDescribeCharts = realCharts;
+  }
+  // A supported config is still described.
+  assert.equal(lib.chartjs.describe(simpleBar([1, 2, 3])).supported, true);
+});
+
+test("a scale whose stacked option is truthy but not true is refused as stacked, as Chart.js stacks on any truthy value", () => {
+  const STACKED = { supported: false, reason: "stacked" };
+  const stackedBar = (value, axis = "y") => ({
+    type: "bar",
+    data: { labels: ["Q1", "Q2", "Q3"], datasets: [{ label: "North", data: [10, 20, 30] }, { label: "South", data: [30, 20, 10] }] },
+    options: { scales: { [axis]: { stacked: value } } },
+  });
+  for (const value of [true, "single", 1, "true", "yes", "false"]) {
+    assert.deepEqual(lib.chartjs.describe(stackedBar(value)), STACKED, JSON.stringify(value));
+    assert.deepEqual(lib.chartjs.describe(stackedBar(value, "x")), STACKED, JSON.stringify(value));
+  }
+  // A falsy value is not stacked in Chart.js, so the bar is described.
+  for (const value of [false, 0, "", null, undefined]) {
+    assert.equal(lib.chartjs.describe(stackedBar(value)).supported, true, JSON.stringify(value));
+  }
+  // The model flag follows the same test.
+  assert.equal(lib.chartjs.toModel(stackedBar("single")).stacked, true);
+  assert.equal(lib.chartjs.toModel(stackedBar(0)).stacked, false);
+});
