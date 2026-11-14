@@ -338,6 +338,8 @@
   // How a value is written by String(): optional sign, digits, optional decimals, optional exponent (1e-7, 1.5e+300).
   const WRITTEN_NUMBER = /^(-?)(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/;
   const DECIMAL_BASE = 10n;
+  // Half a step, in units of the place after the one a value is written to.
+  const HALF_STEP_UNITS = 5n;
   // A remainder of at least half the divisor rounds away from zero: twice the remainder reaches the divisor.
   const ROUND_AWAY_FACTOR = 2n;
   // A ratio becomes a percentage by this factor.
@@ -862,6 +864,50 @@
   }
 
   /**
+   * Whether two values lie exactly half a step apart at a number of decimals, from the digits they are written with. One of them is then
+   * half a step from a figure, and rounding it half away from zero prints a step twice as wide as the data ("0.34 to about 0.340001"
+   * for 0.34 and 0.3400005), so such an end is printed as typed.
+   * @param {number} low - The lower value
+   * @param {number} high - The higher value
+   * @param {number} decimals - The decimal places the ends would be written to
+   * @returns {boolean} True when high - low is exactly 5 units of the place after `decimals`
+   */
+  function isHalfStepWide(low, high, decimals) {
+    const width = exactSeriesSum([high, -low]);
+    return width !== null && width.places === decimals + 1 && width.units === HALF_STEP_UNITS;
+  }
+
+  /**
+   * One end of a range printed as typed beside the other rounded must not read as a wider, narrower or upside-down range than the data
+   * holds ("0.0832 to about 0.083" for 0.0832 and 0.08349). The rounded end is written to at least as many decimals as the typed end
+   * carries, and to enough decimals that it lies on the far side of the typed end ("0.0832 to about 0.0835"). Ranges where both ends
+   * are typed, or both rounded, are returned as they are.
+   * @param {number} min - The lowest value
+   * @param {number} max - The highest value
+   * @param {Object} ends - `{ min, max }`, both as text
+   * @returns {Object} `{ min, max }`, both as text
+   */
+  function matchTypedEndFigures(min, max, ends) {
+    const maxIsRounded = ends.max.startsWith("about ");
+    if (ends.min.startsWith("about ") === maxIsRounded) return ends;
+    const typedText = maxIsRounded ? ends.min : ends.max;
+    const typedValue = maxIsRounded ? min : max;
+    const roundedValue = maxIsRounded ? max : min;
+    if (Math.abs(roundedValue) >= PADDED_DIGITS_FROM) return ends;
+    const decimalsOf = (written) => (written.replace(/^about /, "").split(".")[1] || "").length;
+    const first = Math.min(Math.max(decimalsOf(typedText), decimalsOf(maxIsRounded ? ends.max : ends.min)), MAX_RESTORED_DECIMALS);
+    for (let decimals = first; decimals <= MAX_RESTORED_DECIMALS; decimals += 1) {
+      const written = fixedDigitsOf(roundedValue, decimals, typedExactOf(roundedValue));
+      const farSide = maxIsRounded ? Number(written) > typedValue : Number(written) < typedValue;
+      if (!farSide) continue;
+      const spoken = dropTrailingZeros(written);
+      const rounded = Number(spoken) === roundedValue ? spoken : isHalfStepWide(Math.min(min, max), Math.max(min, max), decimals) ? numberDigits(roundedValue) : `about ${spoken}`;
+      return maxIsRounded ? { min: ends.min, max: rounded } : { min: rounded, max: ends.max };
+    }
+    return ends;
+  }
+
+  /**
    * The two ends of a range as a tier speaks them. In the short tier two
    * different values never come out as the same text: where rounding would
    * make them equal, decimals are added until they differ.
@@ -900,17 +946,27 @@
     const minPlace = figuresPlace(min, ends.min);
     const maxPlace = figuresPlace(max, ends.max);
     const narrowerThanFigures = minPlace !== null && maxPlace !== null && narrowerThanPlace(min, max, Math.min(minPlace, maxPlace));
+    // A two-figure end under 0.1 beside a two-decimal end from 0.1 up has a different step on each side of 0.1, so neither test above sees
+    // it: 0.09659823 to 0.1040567267 read "about 0.097 to about 0.1", under half the width of the data. Two such ends closer together
+    // than the two-decimal step are written to enough decimals to show how narrow the range is.
+    const underTwoFigureLimit = (value) => Math.abs(value) < SHORT_TIER_TWO_FIGURES_BELOW;
+    const narrowerAcrossBands =
+      ends.min.startsWith("about ") &&
+      ends.max.startsWith("about ") &&
+      underTwoFigureLimit(min) !== underTwoFigureLimit(max) &&
+      narrowerThanPlace(min, max, SHORT_TIER_ROUNDING);
     if (
       tier !== TIERS.SHORT ||
       min === max ||
       (ends.min !== ends.max &&
         !narrowerThanStep &&
         !narrowerThanFigures &&
+        !narrowerAcrossBands &&
         figure(ends.min) !== figure(ends.max) &&
         !roundsToOther(min, ends.min, ends.max) &&
         !roundsToOther(max, ends.max, ends.min))
     ) {
-      return ends;
+      return matchTypedEndFigures(min, max, ends);
     }
     for (let decimals = SHORT_TIER_ROUNDING + 1; decimals <= MAX_RESTORED_DECIMALS; decimals += 1) {
       const lowText = dropTrailingZeros(fixedDigitsOf(min, decimals, typedExactOf(min)));
@@ -918,13 +974,13 @@
       if (lowText !== highText) {
         // An end the text reproduces exactly is the typed value, so it is not "about": that holds whether or not the two ends read alike
         // before they were widened ("0.123456789012345" and "0.123456789012346" both round to the same 14 decimals).
-        const spoken = (value, written) => (Number(written) === value ? written : `about ${written}`);
+        const spoken = (value, written) => (Number(written) === value ? written : isHalfStepWide(min, max, decimals) ? numberDigits(value) : `about ${written}`);
         const low = spoken(min, lowText);
         const high = spoken(max, highText);
         // Two "about" ends that lie closer together than one unit of THIS level read as a range one unit wide ("about 1 to about 1.001"
         // for 1.00049 and 1.00051): go on to the next level, as the two-decimal step does above.
         const narrowerThanLevel = low.startsWith("about ") && high.startsWith("about ") && max - min < 10 ** -decimals;
-        if (!narrowerThanLevel) return { min: low, max: high };
+        if (!narrowerThanLevel) return matchTypedEndFigures(min, max, { min: low, max: high });
       }
     }
     return { min: numberDigits(min), max: numberDigits(max) };
