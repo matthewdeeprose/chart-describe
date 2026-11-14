@@ -106,7 +106,7 @@ const AVERAGE_ROWS = [
     name: "three tiny values average 0.00002, not 0, and are not all about 0.00",
     input: chart(band(null, ["A", "B", "C"]), [bar("Probability", [0.00001, 0.00002, 0.00003])]),
     range: "0.00001 to 0.00003",
-    shortRange: "about 0.00001 to about 0.00003",
+    shortRange: "0.00001 to 0.00003",
     average: "0.00002",
     count: "three",
   },
@@ -138,7 +138,7 @@ test("range: a small value beside a larger one is not spoken as about 0.00", () 
   const out = describe(chart(band(null, ["A", "B", "C"]), [line("Rate", [0.00001, 0.002, 0.004])]));
   assert.equal(
     out.short,
-    'A line chart showing "Rate" over three categories. The "Rate" series rises, ranging from about 0.00001 to 0.004.'
+    'A line chart showing "Rate" over three categories. The "Rate" series rises, ranging from 0.00001 to 0.004.'
   );
 });
 
@@ -841,7 +841,7 @@ test("invisible set: Khmer vowels, Mongolian selectors and plane-14 selectors re
 
 test("digits: a number JavaScript writes with an exponent is spoken and tabled in digits", () => {
   const small = describe(chart(band(null, label(3)), [bar("S", [1e-7, 2e-7, 3e-7])]));
-  assert.ok(small.short.includes("Values range from about 0.0000001 to about 0.0000003 with an average of 0.0000002."));
+  assert.ok(small.short.includes("Values range from 0.0000001 to 0.0000003 with an average of 0.0000002."));
   assert.ok(small.lines.includes("Category | S"));
   assert.ok(small.lines.includes("L1 | 0.0000001"));
   const huge = describe(chart(band(null, label(2)), [bar("S", [1e21, 2e21])]));
@@ -1101,8 +1101,8 @@ test("mostly level: points that stand apart both ways say so, and too many point
   // Runs on both sides stay stretches.
   assert.equal(trend([5, 5, 5, 10, 10, 5, 5, 5, 0, 0, 5, 5, 5, 5, 5, 5]), '• The "S" series is mostly level, apart from raised and lowered stretches.');
   // A run on one side and single points on the other: each side says its own.
-  assert.equal(trend([5, 5, 5, 10, 10, 5, 5, 5, 0, 5, 5, 5, 5, 5, 5, 5]), '• The "S" series is mostly level, apart from raised stretches and lowered points.');
-  assert.equal(trend([5, 5, 5, 10, 5, 5, 5, 0, 0, 5, 5, 5, 5, 5, 5, 5]), '• The "S" series is mostly level, apart from raised points and lowered stretches.');
+  assert.equal(trend([5, 5, 5, 10, 10, 5, 5, 5, 0, 5, 5, 5, 5, 5, 5, 5]), '• The "S" series is mostly level, apart from a raised stretch and a lowered point.');
+  assert.equal(trend([5, 5, 5, 10, 5, 5, 5, 0, 0, 5, 5, 5, 5, 5, 5, 5]), '• The "S" series is mostly level, apart from a raised point and a lowered stretch.');
   // A wide square wave holds 43% of its points off its level: not "apart from raised stretches".
   const wave = [];
   for (let block = 0; block < 7; block += 1) for (let i = 0; i < 5; i += 1) wave.push(block % 2 ? 10 : 0);
@@ -1118,7 +1118,7 @@ test("range ends: two ends rounded to the step that lie closer than the step are
   assert.ok(range([9.9949999, 9.9950001]).includes("Values range from 9.9949999 to 9.9950001 "));
   // The boundary: ends a full step or more apart keep their rounding.
   assert.ok(range([1, 1.0050001]).includes("from 1 to about 1.01"));
-  assert.ok(range([1.0049999, 1.0150001]).includes("from about 1.00 to about 1.02"));
+  assert.ok(range([1.0049999, 1.0150001]).includes("from about 1 to about 1.02"));
 });
 
 test("range ends: a rounded end is not left beside a longer end it would round to", () => {
@@ -1126,11 +1126,11 @@ test("range ends: a rounded end is not left beside a longer end it would round t
   assert.ok(range([1.0049999, 1.005]).includes("Values range from 1.0049999 to 1.005 "));
   // Just on the other side: ends that differ at the figure shown keep their rounding.
   assert.ok(range([2.7857142857, 4.8]).includes("from about 2.79 to 4.8"));
-  assert.ok(range([0.00001, 0.00002]).includes("from about 0.00001 to about 0.00002"));
+  assert.ok(range([0.00001, 0.00002]).includes("from 0.00001 to 0.00002"));
   assert.ok(range([1.004999, 1.005]).includes("from 1.004999 to 1.005"));
-  // A whole-number end beside a float-noise end is not the same case: 0 and 0.30000000000000004 keep "about 0.30".
+  // A whole-number end beside a float-noise end is not the same case: 0 and 0.30000000000000004 keep "about 0.3".
   const noisy = describe(chart(band(null, label(7)), [line("S", [0, 0.1, 0.2, 0.3, 0.225, 0.3, 0.30000000000000004])]));
-  assert.ok(noisy.short.includes("ranging from 0 to about 0.30."), noisy.short);
+  assert.ok(noisy.short.includes("ranging from 0 to about 0.3."), noisy.short);
 });
 
 test("repeat: one key for series names and category labels", () => {
@@ -1277,7 +1277,8 @@ test("tie: a range end typed to a tie reads half away from zero in the short tie
   assert.ok(short([-0.00165, -0.00175]).includes("Values range from about -0.0018 to about -0.0017 with an average of -0.0017."));
   // Either side of the tie reads as its own digits.
   assert.ok(short([0.00164, 0.00175]).includes("Values range from about 0.0016 to about 0.0018"));
-  assert.ok(short([0.00166, 0.00175]).includes("Values range from about 0.0017 to about 0.0018"));
+  // (0.00166 beside 0.00176, a whole step apart: beside 0.00175 the pair is narrower than its step and is read in full.)
+  assert.ok(short([0.00166, 0.00176]).includes("Values range from about 0.0017 to about 0.0018"));
 });
 
 // An end the short tier writes in full is the typed value, so "about" stays only on an end whose printed digits differ from the typed ones.
@@ -1328,4 +1329,182 @@ test("a category, series name or title of only U+001D or U+007F reads as none, a
   }
   const named = describe(chart(band(null, ["A", "\u0001", "C"]), [bar("S", [1, 5, 2])]));
   assert.ok(named.lines.includes('• Highest value: 5 ("\u0001").'));
+});
+
+// An even-count median whose double sum overflows is the mean of the exact middle pair.
+test("median: the mean of a middle pair that overflows in doubles is the exact pair's mean", () => {
+  const median = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).lines.find((text) => text.startsWith("• Median value:"));
+  const huge = "17" + "0".repeat(307); // 1.7e308 written in digits
+  assert.equal(median([1, 2, 1.7e308, 1.7e308, 1.7e308, 1.7e308]), `• Median value: ${huge}.`);
+  assert.equal(median([-1.7e308, -1.7e308, -1.7e308, -1.7e308, 1, 2]), `• Median value: -${huge}.`);
+  // A pair whose two values differ: the exact mean of 1.7e308 and 1.79e308 is 1.745e308.
+  assert.equal(median([1, 2, 1.7e308, 1.79e308, 1.79e308, 1.79e308]), `• Median value: 1745${"0".repeat(305)}.`);
+  // Must not move: an odd count, a pair whose sum fits, and every finite median.
+  assert.equal(median([1, 2, 1.7e308, 1.7e308, 1.7e308]), `• Median value: ${huge}.`);
+  assert.equal(median([1, 2, 8e307, 8e307, 8e307, 8e307]), `• Median value: 8${"0".repeat(307)}.`);
+  assert.equal(median([1, 2, 3, 4, 5, 6]), "• Median value: 3.5.");
+});
+
+// A mean below the smallest normal double is spoken from its exact digits, not through a double.
+test("average: a mean below the smallest normal double is spoken from its exact digits", () => {
+  const average = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).lines.find((text) => text.startsWith("• Average value:"));
+  // The exact mean of 5e-324 and 0 is 2.5e-324. As a double it is 5e-324 (twice the mean), and two figures typed back through Number()
+  // gave 5e-324 again, so the old text read 0.000...005.
+  assert.equal(average([5e-324, 0]), `• Average value: 0.${"0".repeat(323)}25.`);
+  assert.equal(average([-5e-324, 0]), `• Average value: -0.${"0".repeat(323)}25.`);
+  // Must not move: a mean whose two figures survive the double (1e-310 has 13 figures of precision), and a mean in the normal range.
+  assert.equal(average([1e-310, 0]), `• Average value: 0.${"0".repeat(310)}5.`);
+  assert.equal(average([2.5e-308, 0]), `• Average value: 0.${"0".repeat(307)}1.`);
+  assert.equal(average([1e-300, 0]), `• Average value: 0.${"0".repeat(300)}5.`);
+});
+
+// A typed value of more than four decimals and under 0.1 keeps two significant figures after "about".
+test("short tier: a typed value under 0.1 is spoken to two significant figures, never to two decimals", () => {
+  const short = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).short;
+  // Two decimals read 0.0050001 as "about 0.01", twice its size, and 0.0068816 as "about 0.01".
+  assert.ok(short([0.0030001, 0.0050001]).includes("Values range from about 0.003 to about 0.005 with an average of 0.004."));
+  assert.ok(short([0.0037034, 0.0068816]).includes("Values range from about 0.0037 to about 0.0069 with an average of 0.005."));
+  assert.ok(short([0.0000001, 0.0050001]).includes("The highest value, about 0.005 at"));
+  assert.ok(short([0.0050001, 1, 1, 1]).includes("The lowest value, about 0.005 at"));
+  assert.ok(short([0.0612345, 0.0712345]).includes("Values range from about 0.061 to about 0.071 with an average of 0.07."));
+  assert.ok(short([-0.0050001, -0.0030001]).includes("Values range from about -0.005 to about -0.003 with an average of -0.004."));
+  // A value that rounds up to 0.1 is spoken as 0.1.
+  assert.ok(short([0.09999999, 0.2]).includes("Values range from about 0.1 to 0.2 with an average of 0.15."));
+  // Must not move: a value at or above 0.1 (two decimals), a value of four decimals or fewer (0.0099 stays as typed; the other end is
+  // a seven-decimal value under 0.1 and does move), and a pair read in full.
+  assert.ok(short([0.12345, 0.2]).includes("Values range from about 0.12 to 0.2 with an average of 0.16."));
+  assert.ok(short([0.100001, 0.2]).includes("Values range from about 0.1 to 0.2 with an average of 0.15."));
+  assert.ok(short([0.0099, 0.0123456]).includes("Values range from 0.0099 to about 0.012 with an average of 0.01."));
+  assert.ok(short([0.0049999, 0.0050001]).includes("Values range from 0.0049999 to 0.0050001 with an average of 0.005."));
+});
+
+// Two "about" ends closer together than one unit of the level they were widened to are written to more decimals.
+test("short tier: two ends narrower than the level they are written at go on to more decimals", () => {
+  const short = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).short;
+  // Each pair is 1e-5 to 6e-5 wide and used to read as a range one unit of the third to fifth decimal wide ("about 1 to about 1.001").
+  assert.ok(short([1.00049, 1.00051]).includes("Values range from 1.00049 to 1.00051 with an average of 1.0005."));
+  assert.ok(short([18.00004, 18.00005]).includes("Values range from 18.00004 to 18.00005 with an average of 18.000045."));
+  assert.ok(short([1.00004, 1.00005]).includes("Values range from 1.00004 to 1.00005 with an average of 1.000045."));
+  assert.ok(short([3.999999, 4.000005]).includes("Values range from 3.999999 to 4.000005 with an average of 4."));
+  assert.ok(short([0.90003, 0.90006]).includes("Values range from 0.90003 to 0.90006 with an average of 0.90005."));
+  // Must not move: a pair read in full already, a pair a whole step wide at the level it stops at, and an end that is not "about".
+  assert.ok(short([1.0049999, 1.0050001]).includes("Values range from 1.0049999 to 1.0050001 with an average of 1.005."));
+  assert.ok(short([1.0004, 1.0016]).includes("Values range from 1.0004 to 1.0016 with an average of 1.001."));
+  assert.ok(short([1, 1.0049999]).includes("Values range from 1 to about 1.005 with an average of 1.002."));
+});
+
+// A rounded end sheds its trailing zeros, so one rounded end reads one way ("about 4", never "about 4.00").
+test("short tier: a rounded end sheds its trailing zeros", () => {
+  const short = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).short;
+  // The same rounded end read "about 4.00" in one chart and "about 4" in the other.
+  assert.ok(short([4.00004, 4.0001]).includes("Values range from about 4 to 4.0001 with an average of 4.00007."));
+  assert.ok(short([1.00049, 1.001]).includes("Values range from about 1 to 1.001 with an average of 1.0007."));
+  assert.ok(short([1.5000001, 3]).includes("Values range from about 1.5 to 3 with an average of 2.25."));
+  assert.ok(short([1.1000001, 3]).includes("Values range from about 1.1 to 3 with an average of 2.05."));
+  assert.ok(short([1, 1, 2.000001]).includes("The highest value, about 2 at"));
+  // The rounded-to-the-step test reads the value, not the text, so a pair narrower than its rounding step still reads in full.
+  assert.ok(short([1.0049999, 1.0050001]).includes("Values range from 1.0049999 to 1.0050001 "));
+  // Must not move: a rounded end that keeps two decimals.
+  assert.ok(short([1.5700001, 3]).includes("Values range from about 1.57 to 3 with an average of 2.29."));
+});
+
+// The two-significant-figure end says "about" only where its figures differ from the typed digits.
+test("short tier: a small end whose two figures are the typed digits is not about", () => {
+  const short = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).short;
+  // Typed to five decimals or more, and two figures are all it has: nothing was rounded.
+  assert.ok(short([0.00001, 0.00002]).includes("Values range from 0.00001 to 0.00002 with an average of 0.000015."));
+  assert.ok(short([0.00012, 0.00015]).includes("Values range from 0.00012 to 0.00015 with an average of 0.00014."));
+  assert.ok(short([-0.00001, -0.00002]).includes("Values range from -0.00002 to -0.00001 with an average of -0.000015."));
+  assert.ok(short([0.00000005, 0.00000005, 0.00000025]).includes("The highest value, 0.00000025 at"));
+  assert.ok(short([0.00001, 1, 1, 1]).includes("The lowest value, 0.00001 at"));
+  // Must not move: a longer typed value is still rounded to two figures and is still about, and so is a three-figure one.
+  assert.ok(short([0.000012345, 0.00002]).includes("Values range from about 0.000012 to 0.00002 with an average of 0.000016."));
+  assert.ok(short([0.000125, 0.00015]).includes("Values range from about 0.00013 to 0.00015 with an average of 0.00014."));
+  assert.ok(short([0.00001, 0.0000123456]).includes("Values range from 0.00001 to about 0.000012 with an average of 0.000011."));
+});
+
+// "N% above the average" and "Overall change of N.N%" are the exact figure rounded half away from zero.
+test("percentage: a figure that is an exact tie rounds half away from zero, whichever side of it the double lies", () => {
+  const takeaway = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).lines.find((text) => /% (above|below) the average/.test(text));
+  const overall = (values) => describe(chart(band(null, label(values.length)), [line("S", values)])).lines.find((text) => text.startsWith("• Overall"));
+  // 1.9 over a mean of 0.8 is 237.5% of it, so 137.5% above: the double ratio read 137.49999999999997 and Math.round said 137.
+  assert.equal(takeaway([1.9, -0.3]), '• The highest value, 1.9 at "L1", is 138% above the average.');
+  assert.equal(takeaway([7, -6.5, 10.7, 4.8]), '• The highest value, 10.7 at "L3", is 168% above the average.');
+  assert.equal(takeaway([30.2, 6.6, 3.2]), '• The highest value, 30.2 at "L1", is 127% above the average.');
+  // The overall change is 1681.25% of the start, and toFixed(1) read it down to 1681.2.
+  assert.equal(overall([1.6, 5.1, 7, 4.5, 28.5]), "• Overall increase of 1681.3% from start to end.");
+  assert.equal(overall([1.6, 5.6, 28, 0.5, 29.9]), "• Overall increase of 1768.8% from start to end.");
+  // Must not move: a whole figure, a figure that is not a tie, the "more than 99" form, a tie the double already rounds up, and a plain change.
+  assert.equal(takeaway([10, 1, 1]), '• The highest value, 10 at "L1", is 150% above the average.');
+  assert.equal(takeaway([10, 2, 1]), '• The highest value, 10 at "L1", is 131% above the average.');
+  assert.equal(takeaway([0.51, 2.745, 2.745]), '• The lowest value, 0.51 at "L1", is 75% below the average.');
+  assert.equal(takeaway([0.001, 3, 3]), '• The lowest value, 0.001 at "L1", is more than 99% below the average.');
+  assert.equal(overall([1, 2, 3, 4, 3, 2, 4]), "• Overall increase of 300.0% from start to end.");
+  assert.equal(overall([10, 12, 15, 18, 20, 22, 25]), "• Overall increase of 150.0% from start to end.");
+});
+
+// The two mixed "mostly level" forms count what the series holds.
+test("mostly level: a side with exactly one point or stretch is singular, the others plural", () => {
+  const marked = (marks) => Array.from({ length: 40 }, (_, i) => (i in marks ? marks[i] : 5));
+  const trend = (marks) => describe(chart(band(null, label(40)), [line("S", marked(marks))])).lines.find((text) => text.includes("mostly level"));
+  const sentence = (words) => `• The "S" series is mostly level, apart from ${words}.`;
+  const RAISED_POINT = { 8: 11 };
+  const RAISED_POINTS = { 8: 11, 14: 11 };
+  const RAISED_STRETCH = { 8: 11, 9: 11 };
+  const RAISED_STRETCHES = { 8: 11, 9: 11, 14: 11, 15: 11 };
+  const LOWERED_POINT = { 20: 0 };
+  const LOWERED_POINTS = { 20: 0, 30: 0 };
+  const LOWERED_STRETCH = { 20: 0, 21: 0 };
+  const LOWERED_STRETCHES = { 20: 0, 21: 0, 30: 0, 31: 0 };
+  // Points on the raised side, runs on the lowered side.
+  assert.equal(trend({ ...RAISED_POINT, ...LOWERED_STRETCH }), sentence("a raised point and a lowered stretch"));
+  assert.equal(trend({ ...RAISED_POINT, ...LOWERED_STRETCHES }), sentence("a raised point and lowered stretches"));
+  assert.equal(trend({ ...RAISED_POINTS, ...LOWERED_STRETCH }), sentence("raised points and a lowered stretch"));
+  assert.equal(trend({ ...RAISED_POINTS, ...LOWERED_STRETCHES }), sentence("raised points and lowered stretches"));
+  // Runs on the raised side, points on the lowered side.
+  assert.equal(trend({ ...RAISED_STRETCH, ...LOWERED_POINT }), sentence("a raised stretch and a lowered point"));
+  assert.equal(trend({ ...RAISED_STRETCH, ...LOWERED_POINTS }), sentence("a raised stretch and lowered points"));
+  assert.equal(trend({ ...RAISED_STRETCHES, ...LOWERED_POINT }), sentence("raised stretches and a lowered point"));
+  assert.equal(trend({ ...RAISED_STRETCHES, ...LOWERED_POINTS }), sentence("raised stretches and lowered points"));
+  // Must not move: the compact two-sided forms (the plural covers both sides) and the one-sided forms.
+  assert.equal(trend({ ...RAISED_POINT, ...LOWERED_POINT }), sentence("raised and lowered points"));
+  assert.equal(trend({ ...RAISED_STRETCH, ...LOWERED_STRETCH }), sentence("raised and lowered stretches"));
+  assert.equal(trend({ ...RAISED_POINTS, ...LOWERED_POINTS }), sentence("raised and lowered points"));
+  assert.equal(trend(RAISED_POINTS), sentence("raised points"));
+});
+
+// A mean the double cannot hold at two figures is spoken from its exact digits.
+test("average: a mean too small for a double to hold is spoken from its exact digits, not as 0 or as the nearest double", () => {
+  const average = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).lines.find((text) => text.startsWith("• Average value:"));
+  // [5e-324, 0, 0] has the exact mean 1.67e-324, which is the double 0: it read "Average value: 0."
+  assert.equal(average([5e-324, 0, 0]), `• Average value: 0.${"0".repeat(323)}17.`);
+  // [5e-324, 1e-323] has the exact mean 7.5e-324, which is the double 1e-323: it read 1e-323.
+  assert.equal(average([5e-324, 1e-323]), `• Average value: 0.${"0".repeat(323)}75.`);
+  // Must not move: a mean in the subnormal range that still holds three figures keeps the fewest-figures reading.
+  assert.equal(average([2.5e-308, 0]), `• Average value: 0.${"0".repeat(307)}1.`);
+});
+
+// Two ends under 0.1 are each written to two significant figures, and a pair closer together than one unit of
+// the last of those figures is written to more decimals, as a pair at two decimals is.
+test("short tier: two ends under 0.1 narrower than their two figures go on to more decimals", () => {
+  const short = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).short;
+  // 0.000227 wide: it read "about 0.06 to about 0.061", a range one thousandth wide.
+  assert.ok(short([0.060306, 0.060533]).includes("Values range from about 0.0603 to about 0.0605 with an average of 0.0604."));
+  // The same pair below zero.
+  assert.ok(short([-0.060533, -0.060306]).includes("Values range from about -0.0605 to about -0.0603 with an average of -0.0604."));
+  // Two ends whose last figures sit at different places (0.0001 and 0.001): the coarser place is the unit.
+  assert.ok(short([0.0095123, 0.0101234]).includes("Values range from about 0.0095 to about 0.0101 with an average of 0.01."));
+  // Neither end sheds a zero: 0.0007 wide, it read "about 0.061 to about 0.062".
+  assert.ok(short([0.061201, 0.061899]).includes("Values range from about 0.0612 to about 0.0619 with an average of 0.0616."));
+  // Narrower than the step by one unit of the next place: both ends are the typed values. It read "about 0.0017 to about 0.0018".
+  assert.ok(short([0.00166, 0.00175]).includes("Values range from 0.00166 to 0.00175 with an average of 0.0017."));
+  // Exactly one step wide by its digits (the doubles' difference is a hair under): not narrower, so it keeps its two figures.
+  assert.ok(short([0.00165, 0.00175]).includes("Values range from about 0.0017 to about 0.0018 with an average of 0.0017."));
+  // Past the decimals that can be given back, both ends are read in full.
+  assert.ok(short([0.00000000000000000603061, 0.00000000000000000605339]).includes("Values range from 0.00000000000000000603061 to 0.00000000000000000605339 with"));
+  // Must not move: a pair a whole unit wide, an end that is the typed value, and a pair the widening already reached.
+  assert.ok(short([0.060306, 0.061406]).includes("Values range from about 0.06 to about 0.061 with an average of 0.061."));
+  assert.ok(short([0.0612345, 0.0712345]).includes("Values range from about 0.061 to about 0.071 with an average of 0.07."));
+  assert.ok(short([0.0603, 0.060533]).includes("Values range from 0.0603 to about 0.061 with an average of 0.0604."));
+  assert.ok(short([0.0000603061, 0.0000605339]).includes("Values range from about 0.0000603 to about 0.0000605 with an average of 0.0000604."));
 });

@@ -162,6 +162,13 @@
     LEVEL_APART_POINTS: "mostly level, apart from raised and lowered points",
     LEVEL_APART_RAISED_POINTS: "mostly level, apart from raised points and lowered stretches",
     LEVEL_APART_LOWERED_POINTS: "mostly level, apart from raised stretches and lowered points",
+    // The two mixed forms with the count agreeing on the side that has exactly one: a raised POINT, a lowered STRETCH.
+    LEVEL_APART_ONE_POINT_ONE_STRETCH: "mostly level, apart from a raised point and a lowered stretch",
+    LEVEL_APART_ONE_POINT_STRETCHES: "mostly level, apart from a raised point and lowered stretches",
+    LEVEL_APART_POINTS_ONE_STRETCH: "mostly level, apart from raised points and a lowered stretch",
+    LEVEL_APART_ONE_STRETCH_ONE_POINT: "mostly level, apart from a raised stretch and a lowered point",
+    LEVEL_APART_ONE_STRETCH_POINTS: "mostly level, apart from a raised stretch and lowered points",
+    LEVEL_APART_STRETCHES_ONE_POINT: "mostly level, apart from raised stretches and a lowered point",
     RISES: "rising",
     FALLS: "falling",
     UNKNOWN: "unknown",
@@ -197,6 +204,12 @@
     [TRENDS.LEVEL_APART_POINTS]: "is mostly level, apart from raised and lowered points",
     [TRENDS.LEVEL_APART_RAISED_POINTS]: "is mostly level, apart from raised points and lowered stretches",
     [TRENDS.LEVEL_APART_LOWERED_POINTS]: "is mostly level, apart from raised stretches and lowered points",
+    [TRENDS.LEVEL_APART_ONE_POINT_ONE_STRETCH]: "is mostly level, apart from a raised point and a lowered stretch",
+    [TRENDS.LEVEL_APART_ONE_POINT_STRETCHES]: "is mostly level, apart from a raised point and lowered stretches",
+    [TRENDS.LEVEL_APART_POINTS_ONE_STRETCH]: "is mostly level, apart from raised points and a lowered stretch",
+    [TRENDS.LEVEL_APART_ONE_STRETCH_ONE_POINT]: "is mostly level, apart from a raised stretch and a lowered point",
+    [TRENDS.LEVEL_APART_ONE_STRETCH_POINTS]: "is mostly level, apart from a raised stretch and lowered points",
+    [TRENDS.LEVEL_APART_STRETCHES_ONE_POINT]: "is mostly level, apart from raised stretches and a lowered point",
     [TRENDS.RISES]: "rises",
     [TRENDS.FALLS]: "falls",
   });
@@ -292,6 +305,10 @@
   // author's number stays exact wherever the reader can actually read it.
   const SHORT_TIER_MAX_DECIMALS = 4;
   const SHORT_TIER_ROUNDING = 2;
+  // A rounded value under this keeps two significant figures instead of two decimals: two decimals leave it one figure or none, so
+  // 0.0050001 would read "about 0.01", twice its size.
+  const SHORT_TIER_TWO_FIGURES_BELOW = 0.1;
+  const SHORT_TIER_SMALL_FIGURES = 2;
 
   // The most decimals that a rounded value may be given back to keep it true
   // (an average inside the range, a range whose two ends differ).
@@ -304,6 +321,10 @@
   const PADDED_DIGITS_FROM = 1e21;
   // A mean that bands to 0 but is not 0 is spoken to this many significant figures.
   const SMALL_MEAN_FIGURES = 2;
+  // Below the smallest normal double a double keeps fewer than 53 bits, so a figure typed back through Number() is a different value.
+  const SMALLEST_NORMAL_DOUBLE = 2.2250738585072014e-308;
+  // Below this a double (spacing 4.9e-324) is under 200 steps from zero, so it has fewer than three reliable figures and a mean cannot be read from it.
+  const DOUBLE_TOO_COARSE_BELOW = 1e-322;
 
   // A series whose values are all finite is added exactly (exactSeriesSum), so its mean and its comparisons carry no float noise and no
   // bound is needed. Only a series holding a value that is not finite (outside the stated input) is left to the compensated sum, and a
@@ -319,6 +340,8 @@
   const DECIMAL_BASE = 10n;
   // A remainder of at least half the divisor rounds away from zero: twice the remainder reaches the divisor.
   const ROUND_AWAY_FACTOR = 2n;
+  // A ratio becomes a percentage by this factor.
+  const PERCENT_FACTOR = 100n;
 
   /**
    * The sum of a list of numbers, with Neumaier's compensation: the low part that each addition
@@ -377,6 +400,19 @@
     let total = 0n;
     for (const term of terms) total += term.units * DECIMAL_BASE ** BigInt(term.exponent - finest);
     return { units: total, places: -finest };
+  }
+
+  /**
+   * Whether two finite values lie closer together than one unit of a decimal place, from the digits they are written with (never the
+   * doubles' difference, which puts 0.00175 - 0.00165 a hair under 0.0001).
+   * @param {number} low - The lower value
+   * @param {number} high - The higher value
+   * @param {number} place - The decimal place (3 is thousandths)
+   * @returns {boolean} True when high - low is under 10 ** -place
+   */
+  function narrowerThanPlace(low, high, place) {
+    const width = exactSeriesSum([high, -low]);
+    return width.units * DECIMAL_BASE ** BigInt(place) < DECIMAL_BASE ** BigInt(width.places);
   }
 
   /**
@@ -462,6 +498,45 @@
     let quotient = top / step;
     if ((top % step) * ROUND_AWAY_FACTOR >= step) quotient += 1n;
     return `${negative ? "-" : ""}${quotient}${"0".repeat(-decimals)}`;
+  }
+
+  /**
+   * How far the highest or lowest value lies from the average, as a percentage of the average, rounded HALF AWAY FROM ZERO from the exact
+   * digits to a whole number. `Math.round` on the double ratio reads [1.9, -0.3] as 137% where the exact figure is 137.5, which rounds to 138.
+   * @param {Object} stats - Statistics from computeStatistics (a positive exact sum is needed)
+   * @param {number} value - The highest value (above the average) or the lowest (below it)
+   * @param {boolean} above - True for "above the average", false for "below"
+   * @returns {string|null} The whole percentage in digits, or null where the series has no exact digits (the double is used then)
+   */
+  function exactPercentFromAverage(stats, value, above) {
+    const mean = meanExactOf(stats);
+    const typed = typedExactOf(value);
+    if (mean === null || typed === null || mean.sum.units <= 0n) return null;
+    // mean = S / (count * 10 ** sumPlaces) and value = V / 10 ** valuePlaces, so (value - mean) / mean is (V * count * 10 ** sumPlaces
+    // - S * 10 ** valuePlaces) / (S * 10 ** valuePlaces).
+    const average = mean.sum.units * DECIMAL_BASE ** BigInt(typed.sum.places);
+    const scaledValue = typed.sum.units * BigInt(mean.count) * DECIMAL_BASE ** BigInt(mean.sum.places);
+    const gap = above ? scaledValue - average : average - scaledValue;
+    return exactToFixed({ sum: { units: gap * PERCENT_FACTOR, places: 0 }, count: average }, 0);
+  }
+
+  /**
+   * The size of the change from the first value to the last, as a percentage of the first, to one decimal and with no sign, rounded HALF
+   * AWAY FROM ZERO from the exact digits (`toFixed(1)` on the double reads some exact ties down).
+   * @param {number} first - The first value (not zero)
+   * @param {number} last - The last value
+   * @returns {string|null} The percentage in digits, or null where either value is not finite
+   */
+  function exactPercentChange(first, last) {
+    const start = typedExactOf(first);
+    const end = typedExactOf(last);
+    if (start === null || end === null) return null;
+    const places = Math.max(start.sum.places, end.sum.places);
+    const startUnits = start.sum.units * DECIMAL_BASE ** BigInt(places - start.sum.places);
+    const endUnits = end.sum.units * DECIMAL_BASE ** BigInt(places - end.sum.places);
+    const change = endUnits - startUnits;
+    const size = (change < 0n ? -change : change) * PERCENT_FACTOR;
+    return exactToFixed({ sum: { units: size, places: 0 }, count: startUnits < 0n ? -startUnits : startUnits }, 1);
   }
 
   // A bare four-digit label is called a year only inside this span. A run such
@@ -775,13 +850,15 @@
     const point = text.indexOf(".");
     if (point === -1) return text;
     if (text.length - point - 1 <= SHORT_TIER_MAX_DECIMALS) return text;
-    const rounded = fixedDigitsOf(value, SHORT_TIER_ROUNDING, typedExactOf(value));
-    // A value that is not zero must not round to zero: keep two significant
-    // figures instead (0.00001 is "about 0.00001", not "about 0.00").
-    if (value !== 0 && Number(rounded) === 0) {
-      return `about ${numberDigits(Number(figuresOf(value, 2, typedExactOf(value))))}`;
+    // A value under 0.1 keeps two significant figures instead of two decimals (0.0050001 is "about 0.005", not "about 0.01"), and so
+    // never rounds to zero (0.00001 is "0.00001", not "about 0.00"). Where those figures ARE the typed digits (0.00001 typed to five
+    // decimals) nothing was rounded, so there is no "about"; a longer typed value (0.0000123456) is still "about 0.000012".
+    if (value !== 0 && Math.abs(value) < SHORT_TIER_TWO_FIGURES_BELOW) {
+      const twoFigures = numberDigits(Number(figuresOf(value, SHORT_TIER_SMALL_FIGURES, typedExactOf(value))));
+      return Number(twoFigures) === value ? twoFigures : `about ${twoFigures}`;
     }
-    return `about ${rounded}`;
+    // The trailing zeros go ("about 4", not "about 4.00"), as they do from the widened ends, so one rounded end reads one way.
+    return `about ${dropTrailingZeros(fixedDigitsOf(value, SHORT_TIER_ROUNDING, typedExactOf(value)))}`;
   }
 
   /**
@@ -807,13 +884,28 @@
       own.startsWith("about ") && decimalsOf(other) > SHORT_TIER_ROUNDING && Number(fixedDigitsOf(value, decimalsOf(other), typedExactOf(value))) === figure(other);
     // Two rounded ends that lie closer together than one rounding step ("about 1.00 to about 1.01" for 1.0049999 to 1.0050001) read as
     // a range of a whole step: they are written to enough decimals to show how narrow it is.
-    const roundedToStep = (text) => text.startsWith("about ") && decimalsOf(text) === SHORT_TIER_ROUNDING;
-    const narrowerThanStep = roundedToStep(ends.min) && roundedToStep(ends.max) && max - min < 10 ** -SHORT_TIER_ROUNDING;
+    // An end is rounded to the step when its figure is the value's own two-decimal rounding (read from the value, since the text may
+    // have lost its trailing zeros).
+    const roundedToStep = (value, text) =>
+      text.startsWith("about ") && figure(text) === Number(fixedDigitsOf(value, SHORT_TIER_ROUNDING, typedExactOf(value)));
+    const narrowerThanStep = roundedToStep(min, ends.min) && roundedToStep(max, ends.max) && max - min < 10 ** -SHORT_TIER_ROUNDING;
+    // An end under 0.1 is rounded to two significant figures, so its step is one unit of its last figure's place (0.001 for 0.060306).
+    // Two such ends that lie closer together than the coarser of their steps ("about 0.06 to about 0.061" for 0.060306 to 0.060533)
+    // read as a range of a whole step in the same way, and are written to enough decimals to show how narrow it is. The width is taken
+    // from the typed digits, so a pair exactly one step wide (0.00165 to 0.00175) is not narrower than its step.
+    const figuresPlace = (value, text) =>
+      text.startsWith("about ") && Math.abs(value) < SHORT_TIER_TWO_FIGURES_BELOW
+        ? (figuresOf(value, SHORT_TIER_SMALL_FIGURES, typedExactOf(value)).split(".")[1] || "").length
+        : null;
+    const minPlace = figuresPlace(min, ends.min);
+    const maxPlace = figuresPlace(max, ends.max);
+    const narrowerThanFigures = minPlace !== null && maxPlace !== null && narrowerThanPlace(min, max, Math.min(minPlace, maxPlace));
     if (
       tier !== TIERS.SHORT ||
       min === max ||
       (ends.min !== ends.max &&
         !narrowerThanStep &&
+        !narrowerThanFigures &&
         figure(ends.min) !== figure(ends.max) &&
         !roundsToOther(min, ends.min, ends.max) &&
         !roundsToOther(max, ends.max, ends.min))
@@ -827,7 +919,12 @@
         // An end the text reproduces exactly is the typed value, so it is not "about": that holds whether or not the two ends read alike
         // before they were widened ("0.123456789012345" and "0.123456789012346" both round to the same 14 decimals).
         const spoken = (value, written) => (Number(written) === value ? written : `about ${written}`);
-        return { min: spoken(min, lowText), max: spoken(max, highText) };
+        const low = spoken(min, lowText);
+        const high = spoken(max, highText);
+        // Two "about" ends that lie closer together than one unit of THIS level read as a range one unit wide ("about 1 to about 1.001"
+        // for 1.00049 and 1.00051): go on to the next level, as the two-decimal step does above.
+        const narrowerThanLevel = low.startsWith("about ") && high.startsWith("about ") && max - min < 10 ** -decimals;
+        if (!narrowerThanLevel) return { min: low, max: high };
       }
     }
     return { min: numberDigits(min), max: numberDigits(max) };
@@ -886,6 +983,21 @@
    */
   function figuresOf(value, figures, exact) {
     return exact !== null && Math.abs(value) < PADDED_DIGITS_FROM ? exactToPrecision(exact, figures) : value.toPrecision(figures);
+  }
+
+  /**
+   * A mean to a number of significant figures as it is spoken: the figures written back as a number (so a trailing zero goes), except
+   * for a mean below the smallest normal double, which is spoken from its exact digits. There the written figures do not survive
+   * `Number()` (2.5e-324 parses to 5e-324, twice the mean), so the text is used as it is.
+   * @param {number} value - The mean as a double
+   * @param {number} figures - Significant figures
+   * @param {Object|null} exact - The exact sum and count the mean was taken from, or null
+   * @returns {string} The value in digits
+   */
+  function figuresSpoken(value, figures, exact) {
+    const written = figuresOf(value, figures, exact);
+    if (exact !== null && Math.abs(value) < SMALLEST_NORMAL_DOUBLE) return dropTrailingZeros(written);
+    return numberDigits(Number(written));
   }
 
   /**
@@ -955,6 +1067,10 @@
     }
     // The average of values that are all the same is that value, whatever the banded text would say.
     if (min === max) return numberDigits(min);
+    // A mean below the smallest normal double is a double of one figure or none, so the range tests below (and the double itself) cannot hold it:
+    // [5e-324, 0, 0] has the mean 1.67e-324, which is the double 0, and [5e-324, 1e-323] has 7.5e-324, which is the double 1e-323. It is spoken from
+    // its exact digits, to two figures.
+    if (exact !== null && exact.sum.units !== 0n && Math.abs(mean) < DOUBLE_TOO_COARSE_BELOW) return dropTrailingZeros(figuresOf(mean, SMALL_MEAN_FIGURES, exact));
     const strictlyInside = mean > min && mean < max;
     const inside = (text) => {
       const spoken = Number(text);
@@ -964,7 +1080,7 @@
     if (inside(banded)) {
       // A mean that is not zero is never spoken as 0 (the range holds 0, so the search below would stop at it): add decimals until a figure shows.
       if (mean !== 0 && Number(banded) === 0) {
-        const small = numberDigits(Number(figuresOf(mean, SMALL_MEAN_FIGURES, exact)));
+        const small = figuresSpoken(mean, SMALL_MEAN_FIGURES, exact);
         return inside(small) ? small : banded;
       }
       return banded;
@@ -982,7 +1098,7 @@
     }
     // Only when the mean really is between the ends: an all-equal series (mean = both ends, off by float noise) keeps its banded text.
     for (let figures = 1; strictlyInside && figures <= MAX_SIGNIFICANT_FIGURES; figures += 1) {
-      const spoken = numberDigits(Number(figuresOf(mean, figures, exact)));
+      const spoken = figuresSpoken(mean, figures, exact);
       if (inside(spoken)) return spoken;
     }
     // The mean equals an end in doubles and no shorter figure fits between the ends: speak it in full rather than a rounded figure outside the range.
@@ -1087,12 +1203,23 @@
 
     const sorted = values.slice().sort((a, b) => a - b);
     const middle = Math.floor(count / 2);
-    const median =
-      count === 0
-        ? 0
+    // The median is one typed value or the mean of the two in the middle, so it has exact digits whenever the series does.
+    const medianExact =
+      exactSum === null
+        ? null
         : count % 2 === 1
-          ? sorted[middle]
-          : (sorted[middle - 1] + sorted[middle]) / 2;
+          ? { sum: exactSeriesSum([sorted[middle]]), count: 1 }
+          : { sum: exactSeriesSum([sorted[middle - 1], sorted[middle]]), count: 2 };
+    // The mean of the middle pair is taken as a double sum over two, except where that sum overflows (1.7e308 twice is Infinity): then
+    // it comes from the exact pair, or from the halves where the series has no exact digits. Every finite sum keeps the double path.
+    const middlePairSum = count > 0 && count % 2 === 0 ? sorted[middle - 1] + sorted[middle] : 0;
+    const evenMedian = () =>
+      Number.isFinite(middlePairSum)
+        ? middlePairSum / 2
+        : medianExact !== null
+          ? exactMean(medianExact.sum, 2)
+          : sorted[middle - 1] / 2 + sorted[middle] / 2;
+    const median = count === 0 ? 0 : count % 2 === 1 ? sorted[middle] : evenMedian();
 
     return {
       count: count,
@@ -1106,13 +1233,7 @@
       minIndices: minIndices,
       standardDeviation: largest * Math.sqrt(scaledVariance),
       median: median,
-      // The median is one typed value or the mean of the two in the middle, so it has exact digits whenever the series does.
-      medianExact:
-        exactSum === null
-          ? null
-          : count % 2 === 1
-            ? { sum: exactSeriesSum([sorted[middle]]), count: 1 }
-            : { sum: exactSeriesSum([sorted[middle - 1], sorted[middle]]), count: 2 },
+      medianExact: medianExact,
     };
   }
 
@@ -1215,8 +1336,24 @@
       const raisedPoints = values.filter(farAbove).length === countStretches(values, farAbove);
       const loweredPoints = values.filter(farBelow).length === countStretches(values, farBelow);
       if (raisedPoints && loweredPoints) return TRENDS.LEVEL_APART_POINTS;
-      if (raisedPoints) return TRENDS.LEVEL_APART_RAISED_POINTS;
-      if (loweredPoints) return TRENDS.LEVEL_APART_LOWERED_POINTS;
+      // Points on one side, a run on the other: the singular is used on a side that has exactly one ("a raised point and a lowered
+      // stretch"), the plural otherwise, so the wording counts what the series holds.
+      if (raisedPoints) {
+        const onePoint = values.filter(farAbove).length === 1;
+        const oneStretch = countStretches(values, farBelow) === 1;
+        if (onePoint && oneStretch) return TRENDS.LEVEL_APART_ONE_POINT_ONE_STRETCH;
+        if (onePoint) return TRENDS.LEVEL_APART_ONE_POINT_STRETCHES;
+        if (oneStretch) return TRENDS.LEVEL_APART_POINTS_ONE_STRETCH;
+        return TRENDS.LEVEL_APART_RAISED_POINTS;
+      }
+      if (loweredPoints) {
+        const onePoint = values.filter(farBelow).length === 1;
+        const oneStretch = countStretches(values, farAbove) === 1;
+        if (onePoint && oneStretch) return TRENDS.LEVEL_APART_ONE_STRETCH_ONE_POINT;
+        if (onePoint) return TRENDS.LEVEL_APART_STRETCHES_ONE_POINT;
+        if (oneStretch) return TRENDS.LEVEL_APART_ONE_STRETCH_POINTS;
+        return TRENDS.LEVEL_APART_LOWERED_POINTS;
+      }
       return TRENDS.LEVEL_APART;
     }
 
@@ -2323,7 +2460,7 @@
       return [
         text(`The highest value, ${formatAuthorValueForTier(tier, stats.max)} at `),
         ...pointReferencesRuns(chart, stats.maxIndices, REFERENCE_STYLE.STANDALONE),
-        text(`, is ${Math.round((maxRatio - 1) * 100)}% above the average.`),
+        text(`, is ${exactPercentFromAverage(stats, stats.max, true) ?? Math.round((maxRatio - 1) * 100)}% above the average.`),
       ];
     }
     // This is the sign guard, and it is deliberately NOT mirrored above.
@@ -2335,10 +2472,11 @@
     // and it means exactly what it says. So widening this guard to both
     // branches would suppress a sentence that is doing its job.
     if (minRatio < LOW_POINT_RATIO && stats.min >= 0) {
+      const below = Number(exactPercentFromAverage(stats, stats.min, false) ?? Math.round((1 - minRatio) * 100));
       return [
         text(`The lowest value, ${formatAuthorValueForTier(tier, stats.min)} at `),
         ...pointReferencesRuns(chart, stats.minIndices, REFERENCE_STYLE.STANDALONE),
-        text(`, is ${stats.min > 0 && Math.round((1 - minRatio) * 100) >= 100 ? "more than 99" : Math.round((1 - minRatio) * 100)}% below the average.`),
+        text(`, is ${stats.min > 0 && below >= 100 ? "more than 99" : below}% below the average.`),
       ];
     }
     return rangeSentence;
@@ -3098,7 +3236,7 @@
         items.push(
           item([
             text(
-              `Overall ${percentChange > 0 ? "increase" : "decrease"} of ${Math.abs(percentChange).toFixed(1)}% from start to end.`
+              `Overall ${percentChange > 0 ? "increase" : "decrease"} of ${exactPercentChange(first, last) ?? Math.abs(percentChange).toFixed(1)}% from start to end.`
             ),
           ])
         );
