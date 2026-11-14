@@ -548,7 +548,7 @@ test("21: a whole-number total of sixteen to twenty digits keeps every digit", (
   const total = (pairs) => describe("", pairs).lines.find((line) => line.startsWith("• Total: "));
   assert.equal(total([["A", 9007199254740991], ["B", 1]]), "• Total: 9007199254740992");
   assert.equal(total([["A", 9007199254740992], ["B", 9007199254740992]]), "• Total: 18014398509481984");
-  assert.equal(total([["A", 9007199254740991], ["B", 2]]), "• Total: 9007199254740992", "the sum is the nearest double: the exact sum is not a double");
+  assert.equal(total([["A", 9007199254740991], ["B", 2]]), "• Total: 9007199254740993", "the sum is not a double, and both values are exact, so the sum is printed");
   // Controls: the case an earlier rule repaired, a total below 2^53, and a total from 1e21 up (exponent form) are unchanged.
   assert.equal(total([["A", 9007199254740990], ["B", 1]]), "• Total: 9007199254740991");
   assert.equal(total([["A", 1e20], ["B", 1e20]]), "• Total: 200000000000000000000");
@@ -883,6 +883,46 @@ test("39h: the printed total keeps its sixteen-digit limit", () => {
   // Seventeen digits or more keeps the rounded print, though the share is now tested on the whole sum.
   assert.equal(totalOf([["A", 6821827.48694711], ["B", 6160804.89267844], ["C", 661022.594268672]]), "13643654.9739");
   assert.equal(totalOf([["A", 2469135.7802469134], ["B", 1234567.8901234567], ["C", 1234567.8901234567], ["D", 0.0000012345678901]]), "4938271.5605");
+});
+
+test("40b: a whole-number total past 2^53 tests the share on the exact sum", () => {
+  // The exact sum is 10000000000000000; twice the largest, 10000000000000002, is above it. The double total is not a safe integer.
+  assert.equal(proportionOf([["A", 5000000000000001], ["B", 4000000000000000], ["C", 999999999999999]]), "about half");
+  assert.equal(proportionOf([["C", 999999999999999], ["B", 4000000000000000], ["A", 5000000000000001]]), "about half");
+  assert.equal(proportionOf([["A", 5000000000000000], ["B", 4000000000000000], ["C", 1000000000000000]]), "exactly half");
+  // A third and a quarter, one unit off and exact, at a total of 1.35e16 and 1.6e16.
+  const thirds = (first) => [["A", first], ["B", 3000000000000000], ["C", 3000000000000000], ["D", 3000000000000000]];
+  assert.equal(proportionOf(thirds(4500000000000000)), "exactly a third");
+  assert.equal(proportionOf(thirds(4500000000000001)), "about a third");
+  const quarters = (first) => [["A", first], ["B", 3000000000000000], ["C", 3000000000000000], ["D", 3000000000000000], ["E", 3000000000000000]];
+  assert.equal(proportionOf(quarters(4000000000000000)), "exactly a quarter");
+  assert.equal(proportionOf(quarters(4000000000000001)), "about a quarter");
+  // At or below 2^53 the whole-number rule is unchanged.
+  assert.equal(proportionOf([["A", 2], ["B", 1], ["C", 1]]), "exactly half");
+});
+
+test("40a: a whole largest value beside decimals is tested on the exact sum, not on a double total that rounds to a whole number", () => {
+  // The exact sum is 151509295.99999999; twice the largest, 151509296, is 1e-8 above it. The double total is 151509296.
+  const rest = [["B", 9.13373489], ["C", 75754638.8662651]];
+  assert.equal(proportionOf([["A", 75754648], ...rest]), "about half");
+  assert.equal(proportionOf([["C", 75754638.8662651], ["B", 9.13373489], ["A", 75754648]]), "about half");
+  assert.equal(proportionOf([["A", 48271832], ["B", 1.36733149], ["C", 48271830.6326685]]), "about half");
+  // The same shape with an exact half still reads exactly, and a whole-number pie keeps its own rule.
+  assert.equal(proportionOf([["A", 75754648], ["B", 9.1337349], ["C", 75754638.8662651]]), "exactly half");
+  assert.equal(proportionOf([["A", 2], ["B", 1.5], ["C", 0.5]]), "exactly half");
+  assert.equal(proportionOf([["A", 2], ["B", 1], ["C", 1]]), "exactly half");
+});
+
+test("40c: a whole-number total is printed as the exact sum when every value is a whole number a double holds exactly", () => {
+  const totalOf = (pairs) => /• Total: (\S+)/.exec(describe("", pairs).detailed)?.[1];
+  // The sum is 12734948579454797, one more than the nearest double.
+  assert.equal(totalOf([["A", 6665515313157813], ["B", 5945040481863544], ["C", 124392784433440]]), "12734948579454797");
+  assert.equal(totalOf([["A", 9007199254740991], ["B", 2]]), "9007199254740993");
+  assert.equal(totalOf([["A", 4500000000000001], ["B", 3000000000000000], ["C", 3000000000000000], ["D", 3000000000000000]]), "13500000000000001");
+  // Controls: a total at or below 2^53, a value that is itself past 2^53 (already the nearest double), and a decimal pie are unchanged.
+  assert.equal(totalOf([["A", 9007199254740990], ["B", 1]]), "9007199254740991");
+  assert.equal(totalOf([["A", 2e16], ["B", 1], ["C", 1], ["D", 1]]), "20000000000000004");
+  assert.equal(totalOf([["A", 6821827.48694711], ["B", 6160804.89267844], ["C", 661022.594268672]]), "13643654.9739");
 });
 
 // U+001D and U+007F draw nothing in Chromium, so they read as no name and no title; U+0001 draws a box and stays a name

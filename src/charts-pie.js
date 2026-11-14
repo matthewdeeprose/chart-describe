@@ -202,11 +202,11 @@
   /**
    * The sum of the values exactly as they are written, with no limit on its length, so a share can be tested against it.
    * Each value is read from its own text (formatValue) and added as a whole number of its finest place.
-   * Returns null when a value is not plain digits (not finite) or the pie has no decimal value.
+   * Returns null when a value is not plain digits (not finite).
    * @param {Array<{value: number}>} segments - The segments
-   * @returns {string|null} The sum as text, or null
+   * @returns {{text: string, places: number}|null} The sum as text and the finest decimal place any value carries, or null
    */
-  function exactDecimalSum(segments) {
+  function exactSum(segments) {
     const parts = [];
     let places = 0;
     for (const segment of segments) {
@@ -220,22 +220,35 @@
       const scaled = BigInt(whole + fraction.padEnd(places, "0"));
       return sign ? running - scaled : running + scaled;
     }, 0n);
-    // A pie of whole numbers keeps the whole-number rule (every digit of the nearest double), so only a decimal value comes here.
-    if (places === 0) return null;
+    if (places === 0) return { text: sum.toString(), places };
     const digits = (sum < 0n ? -sum : sum).toString().padStart(places + 1, "0");
     const written = `${digits.slice(0, -places)}.${digits.slice(-places)}`.replace(/\.?0+$/, "");
-    return sum < 0n ? `-${written}` : written;
+    return { text: sum < 0n ? `-${written}` : written, places };
+  }
+
+  /**
+   * The exact sum, whole or decimal, as text, for testing a share.
+   * @param {Array<{value: number}>} segments - The segments
+   * @returns {string|null} The sum as text, or null when a value is not plain digits
+   */
+  function exactDecimalSum(segments) {
+    const sum = exactSum(segments);
+    return sum === null ? null : sum.text;
   }
 
   /**
    * The total as the exact sum when it is short enough to print: it is never smaller than one of its own parts and carries
-   * no float noise. Returns null when there is no exact sum or it needs more than sixteen digits.
+   * no float noise. A pie of whole numbers that a double holds exactly prints its sum in full, however long, because above 2^53
+   * the nearest double is not the sum. Returns null when there is no exact sum, a whole value is itself past 2^53 (it is
+   * already the nearest double, so the total is too), or a decimal sum needs more than sixteen digits.
    * @param {Array<{value: number}>} segments - The segments
    * @returns {string|null} The total as text, or null
    */
   function exactDecimalTotal(segments) {
-    const written = exactDecimalSum(segments);
-    if (written === null) return null;
+    const sum = exactSum(segments);
+    if (sum === null) return null;
+    if (sum.places === 0) return segments.every((segment) => Number.isSafeInteger(segment.value)) ? sum.text : null;
+    const written = sum.text;
     // Count the digits that matter: not the sign, not the leading zeros, not the point.
     if (written.replace(/^-/, "").replace(/^0?\.?0*/, "").replace(".", "").length > EXACT_TOTAL_MAX_DIGITS) return null;
     return written;
@@ -348,19 +361,16 @@
 
   /**
    * The phrase for the largest share, tested on the UNROUNDED fraction.
-   * "exactly" when the share is that fraction, "over" only above it. Whole numbers that a double holds exactly, and decimals
-   * with an exact sum, are tested exactly whatever the length of the sum; any other pie keeps the tolerance.
+   * "exactly" when the share is that fraction, "over" only above it. A pie whose values print as plain digits is tested on its
+   * exact sum, whole or decimal, whatever the length of the sum; any other pie keeps the tolerance.
    * @param {number} value - The largest segment's value
    * @param {number} total - The total as a number
-   * @param {string|null} [exactTotal] - The sum as exact decimal text (exactDecimalSum), or null
+   * @param {string|null} [exactTotal] - The sum as exact text (exactDecimalSum), or null
    */
   function proportionPhrase(value, total, exactTotal = null) {
     const fraction = value / total;
-    // Two whole numbers that a double holds exactly carry no float noise, so their share is tested exactly.
-    const exact = Number.isSafeInteger(value) && Number.isSafeInteger(total);
     const near = (target) => {
       const denominator = Math.round(1 / target);
-      if (exact) return value * denominator === total;
       const decimal = decimalShareIs(value, exactTotal, denominator);
       return decimal === null ? Math.abs(fraction - target) <= FRACTION_TOLERANCE : decimal;
     };
