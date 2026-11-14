@@ -194,18 +194,19 @@
     return Number.isFinite(rounded) ? rounded : total;
   }
 
-  // The most digits an exact decimal total may carry. A double holds fifteen digits for certain and a sixteenth in many cases, so
-  // a total of sixteen digits or fewer is written exactly; a longer one cannot be held by the sum and keeps the rounding above.
+  // The most digits a PRINTED exact decimal total may carry. A double holds fifteen digits for certain and a sixteenth in many
+  // cases, so a total of sixteen digits or fewer is written exactly; a longer one keeps the rounding above. Only the printed
+  // total is capped: a share is tested against the whole sum, however many digits it has.
   const EXACT_TOTAL_MAX_DIGITS = 16;
 
   /**
-   * The total as the sum of the values exactly as they are written, so it is never smaller than one of its own parts and
-   * carries no float noise. Each value is read from its own text (formatValue) and added as a whole number of its finest place.
-   * Returns null when a value is not plain digits (not finite) or the sum needs more than sixteen digits.
+   * The sum of the values exactly as they are written, with no limit on its length, so a share can be tested against it.
+   * Each value is read from its own text (formatValue) and added as a whole number of its finest place.
+   * Returns null when a value is not plain digits (not finite) or the pie has no decimal value.
    * @param {Array<{value: number}>} segments - The segments
-   * @returns {string|null} The total as text, or null
+   * @returns {string|null} The sum as text, or null
    */
-  function exactDecimalTotal(segments) {
+  function exactDecimalSum(segments) {
     const parts = [];
     let places = 0;
     for (const segment of segments) {
@@ -223,9 +224,21 @@
     if (places === 0) return null;
     const digits = (sum < 0n ? -sum : sum).toString().padStart(places + 1, "0");
     const written = `${digits.slice(0, -places)}.${digits.slice(-places)}`.replace(/\.?0+$/, "");
-    // Count the digits that matter: not the leading zeros, not the point.
-    if (written.replace(/^0?\.?0*/, "").replace(".", "").length > EXACT_TOTAL_MAX_DIGITS) return null;
     return sum < 0n ? `-${written}` : written;
+  }
+
+  /**
+   * The total as the exact sum when it is short enough to print: it is never smaller than one of its own parts and carries
+   * no float noise. Returns null when there is no exact sum or it needs more than sixteen digits.
+   * @param {Array<{value: number}>} segments - The segments
+   * @returns {string|null} The total as text, or null
+   */
+  function exactDecimalTotal(segments) {
+    const written = exactDecimalSum(segments);
+    if (written === null) return null;
+    // Count the digits that matter: not the sign, not the leading zeros, not the point.
+    if (written.replace(/^-/, "").replace(/^0?\.?0*/, "").replace(".", "").length > EXACT_TOTAL_MAX_DIGITS) return null;
+    return written;
   }
 
   /**
@@ -319,7 +332,7 @@
    * True when a decimal value is exactly one part in `denominator` of the exact decimal total, both worked out from their
    * written digits as whole numbers of the finest place. Null when either is not plain digits, so the caller keeps the tolerance.
    * @param {number} value - The segment value
-   * @param {string|null} exactTotal - The total from exactDecimalTotal, or null
+   * @param {string|null} exactTotal - The sum from exactDecimalSum, or null
    * @param {number} denominator - 2, 3 or 4
    * @returns {boolean|null} The exact answer, or null when there is none
    */
@@ -335,11 +348,11 @@
 
   /**
    * The phrase for the largest share, tested on the UNROUNDED fraction.
-   * "exactly" when the share is that fraction, "over" only above it. Whole numbers and decimals of sixteen digits or
-   * fewer are tested exactly; anything longer keeps the tolerance.
+   * "exactly" when the share is that fraction, "over" only above it. Whole numbers that a double holds exactly, and decimals
+   * with an exact sum, are tested exactly whatever the length of the sum; any other pie keeps the tolerance.
    * @param {number} value - The largest segment's value
    * @param {number} total - The total as a number
-   * @param {string|null} [exactTotal] - The total as exact decimal text (exactDecimalTotal), or null
+   * @param {string|null} [exactTotal] - The sum as exact decimal text (exactDecimalSum), or null
    */
   function proportionPhrase(value, total, exactTotal = null) {
     const fraction = value / total;
@@ -654,7 +667,7 @@
       ];
     }
 
-    const proportion = proportionPhrase(largest.value, total, exactDecimalTotal(segments));
+    const proportion = proportionPhrase(largest.value, total, exactDecimalSum(segments));
     return [
       segmentLabel(largest, { opening: true }),
       text(" is the largest segment at "),

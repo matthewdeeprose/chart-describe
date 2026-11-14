@@ -841,9 +841,48 @@ test("39b: a decimal share that is exactly a fraction still reads exactly", () =
   assert.equal(proportionOf([["A", 1.5], ["B", 1], ["C", 0.5]]), "exactly half");
 });
 
-test("39c: values of more than sixteen digits keep the tolerance", () => {
-  assert.equal(proportionOf([["A", 0.30000000000000004], ["B", 0.1], ["C", 0.1], ["D", 0.1]]), "exactly half");
-  assert.equal(proportionOf([["A", 0.12345678901234567], ["B", 0.06172839450617284], ["C", 0.06172839450617284]]), "exactly half");
+test("39c: a total of more than sixteen digits is still tested exactly, from the digits the values print with", () => {
+  // 0.30000000000000004 is the double's own digits: twice it is 0.60000000000000008, not the total 0.60000000000000004.
+  assert.equal(proportionOf([["A", 0.30000000000000004], ["B", 0.1], ["C", 0.1], ["D", 0.1]]), "about half");
+  // The double of 0.12345678901234567 prints as 0.12345678901234566, so twice it is one unit short of the other two together.
+  assert.equal(proportionOf([["A", 0.12345678901234567], ["B", 0.06172839450617284], ["C", 0.06172839450617284]]), "about half");
+});
+
+test("39d: a share one last-place unit off half reads about half when the total has seventeen digits", () => {
+  // Every value has fifteen figures; the total 13643654.973894222 has seventeen.
+  const rest = [["B", 6160804.89267844], ["C", 661022.594268672]];
+  assert.equal(proportionOf([["A", 6821827.48694711], ...rest]), "about half");
+  assert.equal(proportionOf([["A", 6821827.48694712], ...rest]), "about half");
+  assert.equal(proportionOf([["A", 6821827.48694711], ["B", 6160804.89267844], ["C", 661022.59426867]]), "exactly half");
+  assert.equal(proportionOf([["B", 6160804.89267844], ["C", 661022.594268672], ["A", 6821827.48694711]]), "about half");
+});
+
+test("39e: the same seventeen-digit total leaves an exact half, and a fifteen-digit total, as they were", () => {
+  assert.equal(proportionOf([["A", 6821827.4869471], ["B", 6160804.8926784], ["C", 661022.5942687]]), "exactly half");
+  assert.equal(proportionOf([["A", 6821827.486947], ["B", 6160804.8926784], ["C", 661022.5942687]]), "about half");
+});
+
+test("39f: a third and a quarter are tested exactly at a seventeen-digit total", () => {
+  const thirds = (first, others) => [["A", first], ...others.map((value, i) => ["BCD"[i], value])];
+  assert.equal(proportionOf(thirds(6000000.000000003, [4000000.000000002, 4000000.000000002, 4000000.000000002])), "exactly a third");
+  assert.equal(proportionOf(thirds(6000000.000000004, [4000000.000000003, 4000000.000000003, 4000000.000000003])), "about a third");
+  const quarters = (first) => [["A", first], ["B", 3000000.000000003], ["C", 3000000.000000003], ["D", 3000000.000000003], ["E", 3000000.000000003]];
+  assert.equal(proportionOf(quarters(4000000.000000004)), "exactly a quarter");
+  assert.equal(proportionOf(quarters(4000000.000000005)), "about a quarter");
+});
+
+test("39g: a total of twenty or more digits is tested exactly", () => {
+  // The total has seven whole digits and sixteen decimal places; the largest is short of half by 6e-7.
+  assert.equal(proportionOf([["A", 2469135.7802469134], ["B", 1234567.8901234567], ["C", 1234567.8901234567], ["D", 0.0000012345678901]]), "about half");
+});
+
+test("39h: the printed total keeps its sixteen-digit limit", () => {
+  const totalOf = (pairs) => /• Total: (\S+)/.exec(describe("", pairs).detailed)?.[1];
+  // Sixteen digits or fewer is written in full, as before.
+  assert.equal(totalOf([["A", 6821827.4869471], ["B", 6160804.8926784], ["C", 661022.5942687]]), "13643654.9738942");
+  // Seventeen digits or more keeps the rounded print, though the share is now tested on the whole sum.
+  assert.equal(totalOf([["A", 6821827.48694711], ["B", 6160804.89267844], ["C", 661022.594268672]]), "13643654.9739");
+  assert.equal(totalOf([["A", 2469135.7802469134], ["B", 1234567.8901234567], ["C", 1234567.8901234567], ["D", 0.0000012345678901]]), "4938271.5605");
 });
 
 // U+001D and U+007F draw nothing in Chromium, so they read as no name and no title; U+0001 draws a box and stays a name
