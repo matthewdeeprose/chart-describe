@@ -1273,8 +1273,8 @@ test("tie: the rule holds where the sentence changes its precision and where dec
 test("tie: a range end typed to a tie reads half away from zero in the short tier", () => {
   const short = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).short;
   // 0.00165 is stored a hair below its tie and reads to two figures as 0.0017.
-  assert.ok(short([0.00165, 0.00175]).includes("Values range from about 0.0017 to about 0.0018 with an average of 0.0017."));
-  assert.ok(short([-0.00165, -0.00175]).includes("Values range from about -0.0018 to about -0.0017 with an average of -0.0017."));
+  assert.ok(short([0.00165, 0.00185]).includes("Values range from about 0.0017 to about 0.0019 with an average of 0.0018."));
+  assert.ok(short([-0.00165, -0.00185]).includes("Values range from about -0.0019 to about -0.0017 with an average of -0.0018."));
   // Either side of the tie reads as its own digits.
   assert.ok(short([0.00164, 0.00175]).includes("Values range from about 0.0016 to about 0.0018"));
   // (0.00166 beside 0.00176, a whole step apart: beside 0.00175 the pair is narrower than its step and is read in full.)
@@ -1298,7 +1298,7 @@ test("range ends: an end written in full is the typed value and is not about, wh
 
 test("range ends: an end whose printed digits differ from the typed value is still about", () => {
   const short = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).short;
-  assert.ok(short([0.00165, 0.00175]).includes("Values range from about 0.0017 to about 0.0018 with an average of 0.0017."));
+  assert.ok(short([0.00165, 0.00185]).includes("Values range from about 0.0017 to about 0.0019 with an average of 0.0018."));
   assert.ok(short([2.7857142857, 4.8]).includes("Values range from about 2.79 to 4.8 with an average of 3.79."));
   // Two ends that lie closer than the rounding step are written in full, and read as typed.
   assert.ok(short([1.0049999, 1.0050001]).includes("Values range from 1.0049999 to 1.0050001 with an average of 1.005."));
@@ -1498,12 +1498,15 @@ test("short tier: two ends under 0.1 narrower than their two figures go on to mo
   assert.ok(short([0.061201, 0.061899]).includes("Values range from about 0.0612 to about 0.0619 with an average of 0.0616."));
   // Narrower than the step by one unit of the next place: both ends are the typed values. It read "about 0.0017 to about 0.0018".
   assert.ok(short([0.00166, 0.00175]).includes("Values range from 0.00166 to 0.00175 with an average of 0.0017."));
-  // Exactly one step wide by its digits (the doubles' difference is a hair under): not narrower, so it keeps its two figures.
-  assert.ok(short([0.00165, 0.00175]).includes("Values range from about 0.0017 to about 0.0018 with an average of 0.0017."));
+  // Exactly one step wide by its digits (the doubles' difference is a hair under): not narrower, so it keeps its two figures. As a bar chart its
+  // average is the low end's figure (0.0017), so both ends then read as typed; a line chart has no average and shows the two figures.
+  assert.ok(short([0.00165, 0.00175]).includes("Values range from 0.00165 to 0.00175 with an average of 0.0017."));
+  assert.ok(describe(chart(band(null, label(2)), [line("S", [0.00165, 0.00175])])).short.includes("ranging from about 0.0017 to about 0.0018."));
   // Past the decimals that can be given back, both ends are read in full.
   assert.ok(short([0.00000000000000000603061, 0.00000000000000000605339]).includes("Values range from 0.00000000000000000603061 to 0.00000000000000000605339 with"));
-  // Must not move: a pair a whole unit wide, and a pair the widening already reached.
-  assert.ok(short([0.060306, 0.061406]).includes("Values range from about 0.06 to about 0.061 with an average of 0.061."));
+  // Must not move: a pair a whole unit wide (its range, and not its average: 0.060856 read "0.061", the top end, and now reads "0.0609"),
+  // and a pair the widening already reached.
+  assert.ok(short([0.060306, 0.061406]).includes("Values range from about 0.06 to about 0.061 with an average of 0.0609."));
   assert.ok(short([0.0612345, 0.0712345]).includes("Values range from about 0.061 to about 0.071 with an average of 0.07."));
   assert.ok(short([0.0000603061, 0.0000605339]).includes("Values range from about 0.0000603 to about 0.0000605 with an average of 0.0000604."));
 });
@@ -1583,4 +1586,70 @@ test("short tier: two rounded ends across 0.1 that lie closer than the two-decim
   assert.ok(short([0.0612345, 0.0712345]).includes("Values range from about 0.061 to about 0.071 with"));
   assert.ok(short([0.0912345, 0.1112345]).includes("Values range from about 0.091 to about 0.11 with"));
   assert.ok(short([0.0999, 0.10004]).includes("Values range from 0.0999 to about 0.1 with"));
+});
+
+// An average spoken as the same figure as an end printed "about" sounds like the top or bottom of the range ("from 0.0994 to about 0.0995
+// with an average of 0.0995", for a mean of 0.09945). Beside such an end the average is given the figures that put it inside the printed range.
+test("short tier: an average is never spoken as the figure of an end printed about, when the mean is inside the printed range", () => {
+  const short = (values, series = bar) => describe(chart(band(null, label(values.length)), [series("S", values)])).short;
+  assert.ok(short([0.0994, 0.0995001]).includes("Values range from 0.0994 to about 0.0995 with an average of 0.09945."));
+  assert.ok(short([0.0099, 0.01000049]).includes("Values range from 0.0099 to about 0.01 with an average of 0.00995."));
+  assert.ok(short([-0.0995001, -0.0994]).includes("Values range from about -0.0995 to -0.0994 with an average of -0.09945."));
+  assert.ok(short([1.994, 1.9950001]).includes("Values range from 1.994 to about 1.995 with an average of 1.9945."));
+  assert.ok(short([0.0994, 0.0995, 0.0995001]).includes("Values range from 0.0994 to about 0.0995 with an average of 0.09947."));
+  // A mean that is the end's own figure (the middle of 0.00165 and 0.00175 is 0.0017, and 0.00165 rounds up to it) cannot move, so the end is
+  // printed as typed instead of "about 0.0017".
+  assert.ok(short([0.00165, 0.00175]).includes("Values range from 0.00165 to 0.00175 with an average of 0.0017."));
+  assert.ok(short([-0.00175, -0.00165]).includes("Values range from -0.00175 to -0.00165 with an average of -0.0017."));
+  // Must not move: an average that is not that figure (0.00165 is the middle of three, and neither end is 0.0017), ends both typed, and the
+  // detailed tier, whose ends are the typed values.
+  assert.ok(short([0.00155, 0.00165, 0.00175]).includes("Values range from about 0.0016 to about 0.0018 with an average of 0.0017."));
+  assert.ok(short([0.0994, 0.0996]).includes("Values range from 0.0994 to 0.0996 with an average of 0.0995."));
+  assert.ok(short([0.0994, 0.0999501]).includes("Values range from 0.0994 to about 0.1 with an average of 0.0997."));
+  assert.ok(short([0.00165, 0.00185]).includes("Values range from about 0.0017 to about 0.0019 with an average of 0.0018."));
+  const detailed = describe(chart(band(null, label(2)), [bar("S", [0.0994, 0.0995001])])).lines;
+  assert.ok(detailed.includes("• Values range from 0.0994 to 0.0995001 with an average of 0.0995."));
+});
+
+// A typed end below 1e-15 beside a rounded end: the rounded end keeps the decimals its own two figures need, as it does above 1e-15. The
+// rule stopped at 15 decimals, so the rounded end printed on 0 or on a multiple of 1e-15 ("from about -0 to 0.0000000000000002" for -3.71e-16 to 2e-16).
+test("short tier: a rounded end beside a typed end below 1e-15 keeps the decimals its own figures need", () => {
+  const short = (values, series = bar) => describe(chart(band(null, label(values.length)), [series("S", values)])).short;
+  // It read "to about 0.000000000000001" (1.5 times the data's own high end) and "from about -0 to 0.0000000000000003".
+  assert.ok(short([4e-16, 6.66e-16, 5e-16]).includes("Values range from 0.0000000000000004 to about 0.00000000000000067 with"));
+  assert.ok(short([3e-16, -2.22e-16, 1e-16]).includes("Values range from about -0.00000000000000022 to 0.0000000000000003 with"));
+  // It read "from about 0 to 0.000000000000000088" and "from about -0 to 0.0000000000000002 with an average of -0.000000000000000024", an average below the printed low end.
+  assert.ok(short([7.34e-17, 8.8e-17]).includes("Values range from about 0.000000000000000073 to 0.000000000000000088 with"));
+  assert.ok(short([1e-16, -3.71e-16, 2e-16]).includes("Values range from about -0.00000000000000037 to 0.0000000000000002 with an average of -0.000000000000000024."));
+  // The same below zero, in a line chart, and at 15 decimals and past (the cap was 15 decimals, so 7.77e-15 needs 16).
+  assert.ok(short([-5e-16, -7.77e-16, -6e-16]).includes("Values range from about -0.00000000000000078 to -0.0000000000000005 with"));
+  assert.ok(short([5e-16, 6e-16, 7.77e-16], line).includes('The "S" series rises, ranging from 0.0000000000000005 to about 0.00000000000000078.'));
+  assert.ok(short([5e-15, 7.77e-15, 6e-15]).includes("Values range from 0.000000000000005 to about 0.0000000000000078 with"));
+  // Must not move: a pair that both ends already print right (two figures past 15 decimals), both ends typed, and a pair above 1e-13.
+  assert.ok(short([1.2e-17, 3.4567e-17]).includes("Values range from 0.000000000000000012 to about 0.000000000000000035 with"));
+  assert.ok(short([1e-16, 2e-16]).includes("Values range from 0.0000000000000001 to 0.0000000000000002 with"));
+  assert.ok(short([5.5e-14, 7.7777e-14]).includes("Values range from 0.000000000000055 to about 0.000000000000078 with"));
+});
+
+// Two rounded ends either side of 0.1 or 0.01, with data about one rounding step wide: each end rounds inward (the step is 0.001 below 0.1
+// and 0.01 above it), so "about 0.095 to about 0.1" printed 0.005 for 0.0101 of data. A printed range at most half the data's is written
+// again at the finer of the two steps.
+test("short tier: two rounded ends across a power of ten that print half the data's width are written at the finer step", () => {
+  const short = (values, series = bar) => describe(chart(band(null, label(values.length)), [series("S", values)])).short;
+  // 0.0101 wide, printed 0.005: it read "about 0.095 to about 0.1".
+  assert.ok(short([0.09468, 0.0952, 0.10479]).includes("Values range from about 0.095 to about 0.105 with an average of 0.1."));
+  assert.ok(short([0.09476, 0.0955, 0.0949, 0.10486]).includes("Values range from about 0.095 to about 0.105 with"));
+  assert.ok(short([-0.10490005, -0.0985, -0.094898]).includes("Values range from about -0.105 to about -0.095 with"));
+  // The same at 0.01 (0.001 wide, printed 0.0005): it read "about 0.0095 to about 0.01", and each end keeps its own two figures.
+  assert.ok(short([0.009468846, 0.0098, 0.010478846]).includes("Values range from about 0.0095 to about 0.0105 with an average of 0.01."));
+  assert.ok(short([-0.01046006, -0.0099, -0.00946003]).includes("Values range from about -0.0105 to about -0.0095 with"));
+  assert.ok(short([0.00948, 0.01048]).includes("Values range from about 0.0095 to about 0.0105 with"));
+  // A line chart reads through the same ends.
+  assert.ok(short([0.09468, 0.0952, 0.10479], line).includes('The "S" series rises, ranging from about 0.095 to about 0.105.'));
+  // Must not move: a pair the across-0.1 rule already widens, a pair a step and a tenth or more wide (it prints at more than half), an
+  // end typed in full, and two ends under 0.1 whose steps match.
+  assert.ok(short([0.0951234, 0.1049999]).includes("Values range from about 0.095 to about 0.105 with"));
+  assert.ok(short([0.009482, 0.010502]).includes("Values range from about 0.0095 to about 0.011 with"));
+  assert.ok(short([0.0948, 0.105]).includes("Values range from 0.0948 to 0.105 with"));
+  assert.ok(short([0.060306, 0.061406]).includes("Values range from about 0.06 to about 0.061 with"));
 });

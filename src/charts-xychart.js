@@ -313,6 +313,9 @@
   // The most decimals that a rounded value may be given back to keep it true
   // (an average inside the range, a range whose two ends differ).
   const MAX_RESTORED_DECIMALS = 15;
+  // The most decimals any double can be written with: 5e-324, the smallest, is 324 places, and its 17 figures reach 340. A rounded end
+  // beside a typed end is written to as many decimals as it needs, so a typed end below 1e-15 is never matched on a coarser end.
+  const MAX_DOUBLE_DECIMALS = 340;
   // A double carries 17 significant figures.
   const MAX_SIGNIFICANT_FIGURES = 17;
   // A derived whole number is spoken to this many significant figures (a double's last two are rounding noise).
@@ -895,8 +898,8 @@
     const roundedValue = maxIsRounded ? max : min;
     if (Math.abs(roundedValue) >= PADDED_DIGITS_FROM) return ends;
     const decimalsOf = (written) => (written.replace(/^about /, "").split(".")[1] || "").length;
-    const first = Math.min(Math.max(decimalsOf(typedText), decimalsOf(maxIsRounded ? ends.max : ends.min)), MAX_RESTORED_DECIMALS);
-    for (let decimals = first; decimals <= MAX_RESTORED_DECIMALS; decimals += 1) {
+    const first = Math.min(Math.max(decimalsOf(typedText), decimalsOf(maxIsRounded ? ends.max : ends.min)), MAX_DOUBLE_DECIMALS);
+    for (let decimals = first; decimals <= MAX_DOUBLE_DECIMALS; decimals += 1) {
       const written = fixedDigitsOf(roundedValue, decimals, typedExactOf(roundedValue));
       const farSide = maxIsRounded ? Number(written) > typedValue : Number(written) < typedValue;
       if (!farSide) continue;
@@ -908,6 +911,52 @@
   }
 
   /**
+   * Whether the range two printed figures show is at most half as wide as the range of the data they stand for, from the digits each is
+   * written with. Two ends rounded to different steps (0.095 and 0.1 either side of 0.1, where the step goes from 0.001 to 0.01) each
+   * move inward, so a pair about one step wide can print at half its width ("about 0.095 to about 0.1" for 0.09468 to 0.10479).
+   * @param {number} shownLow - The lower printed figure
+   * @param {number} shownHigh - The higher printed figure
+   * @param {number} low - The lowest value
+   * @param {number} high - The highest value
+   * @returns {boolean} True when the printed width is at most half the data's
+   */
+  function isAtMostHalfAsWide(shownLow, shownHigh, low, high) {
+    const shown = exactSeriesSum([shownHigh, -shownLow]);
+    const data = exactSeriesSum([high, -low]);
+    if (shown === null || data === null) return false;
+    return 2n * shown.units * DECIMAL_BASE ** BigInt(data.places) <= data.units * DECIMAL_BASE ** BigInt(shown.places);
+  }
+
+  /**
+   * The decimals a short-tier end under 0.1 keeps for its two significant figures (0.0095 is four), and two for an end from 0.1 up.
+   * @param {number} value - A value read from the source
+   * @returns {number} The decimal places of the end's own step
+   */
+  function ownStepPlace(value) {
+    if (value === 0 || Math.abs(value) >= SHORT_TIER_TWO_FIGURES_BELOW) return SHORT_TIER_ROUNDING;
+    return (figuresOf(value, SHORT_TIER_SMALL_FIGURES, typedExactOf(value)).split(".")[1] || "").length;
+  }
+
+  /**
+   * The two ends of a range as a tier speaks them, and then checked against the data: two rounded ends that print a range at most half as
+   * wide as the data are written again, at the finer of their two steps. The two steps differ across a power of ten under 0.1 (0.001 below
+   * 0.1 and 0.01 above it, 0.0001 below 0.01 and 0.001 above it), and each end rounds inward: 0.09468 to 0.10479 read "about 0.095 to about
+   * 0.1", 0.005 for 0.0101, and 0.009468846 to 0.010478846 read "about 0.0095 to about 0.01". Half is where the widening leaves any pair
+   * written at one step: a pair a whole step apart or more prints at more than half, so this check never asks for more than that gives.
+   * @param {string} tier - A TIERS member
+   * @param {number} min - The lowest value
+   * @param {number} max - The highest value
+   * @returns {Object} `{ min, max }`, both as text
+   */
+  function formatRangeEndsForTier(tier, min, max) {
+    const ends = formatRangeEndsFirstPass(tier, min, max);
+    if (tier !== TIERS.SHORT || min === max || !ends.min.startsWith("about ") || !ends.max.startsWith("about ")) return ends;
+    const figure = (text) => Number(text.replace(/^about /, ""));
+    if (!isAtMostHalfAsWide(figure(ends.min), figure(ends.max), min, max)) return ends;
+    return widenRangeEnds(min, max, Math.max(ownStepPlace(min), ownStepPlace(max), SHORT_TIER_ROUNDING + 1));
+  }
+
+  /**
    * The two ends of a range as a tier speaks them. In the short tier two
    * different values never come out as the same text: where rounding would
    * make them equal, decimals are added until they differ.
@@ -916,7 +965,7 @@
    * @param {number} max - The highest value
    * @returns {Object} `{ min, max }`, both as text
    */
-  function formatRangeEndsForTier(tier, min, max) {
+  function formatRangeEndsFirstPass(tier, min, max) {
     const ends = {
       min: formatAuthorValueForTier(tier, min),
       max: formatAuthorValueForTier(tier, max),
@@ -968,7 +1017,19 @@
     ) {
       return matchTypedEndFigures(min, max, ends);
     }
-    for (let decimals = SHORT_TIER_ROUNDING + 1; decimals <= MAX_RESTORED_DECIMALS; decimals += 1) {
+    return widenRangeEnds(min, max, SHORT_TIER_ROUNDING + 1);
+  }
+
+  /**
+   * The two ends of a range written to the fewest decimals, from a first count, at which they differ and are not a whole unit of that
+   * level apart or closer.
+   * @param {number} min - The lowest value
+   * @param {number} max - The highest value
+   * @param {number} firstDecimals - The decimal places to try first
+   * @returns {Object} `{ min, max }`, both as text
+   */
+  function widenRangeEnds(min, max, firstDecimals) {
+    for (let decimals = firstDecimals; decimals <= MAX_RESTORED_DECIMALS; decimals += 1) {
       const lowText = dropTrailingZeros(fixedDigitsOf(min, decimals, typedExactOf(min)));
       const highText = dropTrailingZeros(fixedDigitsOf(max, decimals, typedExactOf(max)));
       if (lowText !== highText) {
@@ -1160,6 +1221,37 @@
     // The mean equals an end in doubles and no shorter figure fits between the ends: speak it in full rather than a rounded figure outside the range.
     // (An all-equal series keeps its banded text, as the comment above says.)
     return atAnEnd !== null ? atAnEnd : min === max ? banded : numberDigits(mean);
+  }
+
+  /**
+   * The bounds an average is spoken strictly inside beside a printed range. An end printed "about" is a rounded figure, and an average
+   * spoken as that same figure sounds like the top or bottom of the range ("from 0.0994 to about 0.0995 with an average of 0.0995", for
+   * a mean of 0.09945), so beside such an end the average is given the figures that put it inside the printed range. A mean that is not
+   * between the printed ends keeps the data's own ends as its bounds.
+   * @param {Object} ends - `{ min, max }` as the short tier prints them
+   * @param {Object} stats - Statistics from computeStatistics
+   * @returns {{min: number, max: number}} The bounds for formatMean
+   */
+  function printedMeanBounds(ends, stats) {
+    const figure = (written) => Number(written.replace(/^about /, ""));
+    const min = ends.min.startsWith("about ") ? figure(ends.min) : stats.min;
+    const max = ends.max.startsWith("about ") ? figure(ends.max) : stats.max;
+    return stats.mean > min && stats.mean < max ? { min, max } : { min: stats.min, max: stats.max };
+  }
+
+  /**
+   * The two printed ends of a range, with an end that is printed "about" given as typed where the spoken average is still that same figure.
+   * That is the mean at its own precision (0.0017 for 0.00165 and 0.00175), which no further figure can move off the end.
+   * @param {Object} ends - `{ min, max }` as the short tier prints them
+   * @param {Object} stats - Statistics from computeStatistics
+   * @param {string} meanText - The average as it is spoken
+   * @returns {Object} `{ min, max }`, both as text
+   */
+  function endsClearOfMean(ends, stats, meanText) {
+    const figure = (written) => Number(written.replace(/^about /, ""));
+    const typedWhereMean = (end, value) => (end.startsWith("about ") && figure(end) === Number(meanText) ? formatAuthorValue(value) : end);
+    const cleared = { min: typedWhereMean(ends.min, stats.min), max: typedWhereMean(ends.max, stats.max) };
+    return cleared.min === ends.min && cleared.max === ends.max ? ends : matchTypedEndFigures(stats.min, stats.max, cleared);
   }
 
   /**
@@ -2444,11 +2536,11 @@
     const only = series[0];
     const stats = computeStatistics(only.values);
     const ends = formatRangeEndsForTier(tier, stats.min, stats.max);
-    const rangeSentence = [
-      text(
-        `Values range from ${ends.min} to ${ends.max} with an average of ${formatMean(stats.mean, stats.min, stats.max, meanExactOf(stats))}.`
-      ),
-    ];
+    const meanBounds = printedMeanBounds(ends, stats);
+    const meanText = formatMean(stats.mean, meanBounds.min, meanBounds.max, meanExactOf(stats));
+    // Only the sentence that speaks the average takes the cleared ends: a line chart's "ranging from" has no average beside it.
+    const averageEnds = endsClearOfMean(ends, stats, meanText);
+    const rangeSentence = [text(`Values range from ${averageEnds.min} to ${averageEnds.max} with an average of ${meanText}.`)];
 
     // THE TEST FOR NO VARIANCE COMES FIRST. A series with no variance cannot be
     // described by a range, a trend or a ratio. The range collapses ("Values
