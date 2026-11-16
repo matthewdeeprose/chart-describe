@@ -536,7 +536,7 @@ test("20: two values that add up to the largest number print that number, not In
   const half = Number.MAX_VALUE / 2;
   const { short, detailed } = describe("", [["A", half], ["B", half]]);
   assert.ok(short.endsWith("Both segments are equal, at 50.0% each."), short);
-  assert.ok(detailed.includes("• Total: 17976931348623157" + "0".repeat(292) + "\n"), "total is the largest number written out");
+  assert.ok(detailed.includes("• Total: about 17976931348623157" + "0".repeat(292) + "\n"), "total is the largest number written out, led by about");
   assert.ok(!detailed.includes("Infinity"));
   // Control: a sum well below the largest number still rounds to fifteen digits.
   assert.ok(describe("", [["A", 8e307], ["B", 9e307]]).detailed.includes("• Total: 17" + "0".repeat(307) + "\n"));
@@ -614,8 +614,8 @@ test("24a: a total keeps small values beside a huge one, and the largest reads m
   const three = describe("", [["A", 1e16], ["B", 1], ["C", 1]]);
   assert.ok(three.detailed.includes("• Total: 10000000000000002"), three.detailed);
   assert.ok(three.short.endsWith("A is the largest segment at more than 99.9%, representing over half of the total."), three.short);
-  // The exact sum 20000000000000003 is not a double; the total is the nearest one.
-  assert.ok(describe("", [["A", 2e16], ["B", 1], ["C", 1], ["D", 1]]).detailed.includes("• Total: 20000000000000004"));
+  // The exact sum 20000000000000003 is not a double; the total prints the sum as written (rule 50).
+  assert.ok(describe("", [["A", 2e16], ["B", 1], ["C", 1], ["D", 1]]).detailed.includes("• Total: 20000000000000003"));
 });
 
 test("24b: float noise in a sum still reads as the plain total", () => {
@@ -650,7 +650,7 @@ test("26: a tie whose members' shares print differently lists each share", () =>
 
 test("27: a total from 1e21 with a fractional segment is not rounded to fifteen digits", () => {
   const { detailed } = describe("", [["A", 1.2345678901234568e22], ["B", 0.5]]);
-  assert.ok(detailed.includes("• Total: 12345678901234568000000"), detailed);
+  assert.ok(detailed.includes("• Total: about 12345678901234568000000"), detailed);
   assert.ok(describe("", [["A", 2e21], ["B", 2e21]]).detailed.includes("• Total: 4000000000000000000000"));
 });
 
@@ -913,16 +913,90 @@ test("40a: a whole largest value beside decimals is tested on the exact sum, not
   assert.equal(proportionOf([["A", 2], ["B", 1], ["C", 1]]), "exactly half");
 });
 
-test("40c: a whole-number total is printed as the exact sum when every value is a whole number a double holds exactly", () => {
+test("40c: a whole-number total is printed as the exact sum of the values as written", () => {
   const totalOf = (pairs) => /• Total: (\S+)/.exec(describe("", pairs).detailed)?.[1];
   // The sum is 12734948579454797, one more than the nearest double.
   assert.equal(totalOf([["A", 6665515313157813], ["B", 5945040481863544], ["C", 124392784433440]]), "12734948579454797");
   assert.equal(totalOf([["A", 9007199254740991], ["B", 2]]), "9007199254740993");
   assert.equal(totalOf([["A", 4500000000000001], ["B", 3000000000000000], ["C", 3000000000000000], ["D", 3000000000000000]]), "13500000000000001");
-  // Controls: a total at or below 2^53, a value that is itself past 2^53 (already the nearest double), and a decimal pie are unchanged.
+  // Controls: a total at or below 2^53 and a decimal pie are unchanged. A value past 2^53 is now written in the sum too (rule 50).
   assert.equal(totalOf([["A", 9007199254740990], ["B", 1]]), "9007199254740991");
-  assert.equal(totalOf([["A", 2e16], ["B", 1], ["C", 1], ["D", 1]]), "20000000000000004");
+  assert.equal(totalOf([["A", 2e16], ["B", 1], ["C", 1], ["D", 1]]), "20000000000000003");
   assert.equal(totalOf([["A", 6821827.48694711], ["B", 6160804.89267844], ["C", 661022.594268672]]), "13643654.9739");
+});
+
+// Rule 50: a whole-number total prints the written sum up to 21 digits, below 1e21 (JavaScript's own plain-digit limit)
+
+test("50a: a whole-number pie below 1e21 prints the sum of its values as written, including a value past 2^53", () => {
+  const totalOf = (pairs) => /• Total: (\S+)/.exec(describe("", pairs).detailed)?.[1];
+  assert.equal(totalOf([["A", 2e16], ["B", 1], ["C", 1], ["D", 1]]), "20000000000000003");
+  assert.equal(totalOf([["A", 9007199254740993], ["B", 1]]), "9007199254740993");
+  assert.equal(totalOf([["A", 2e16], ["B", 1], ["C", 1], ["D", -1]]), "20000000000000001", "a negative value does not stop the sum");
+  assert.equal(totalOf([["A", -2e16], ["B", -1]]), "-20000000000000001");
+  assert.equal(totalOf([["A", 2e16], ["B", 0], ["C", 1]]), "20000000000000001");
+  // A sum of 21 digits is the longest written, and it is exact where the double total is not.
+  assert.equal(totalOf([["A", 1e20], ["B", 1e20], ["C", 1]]), "200000000000000000001");
+  // The short sentence does not carry the total, so it is the same either way.
+  assert.ok(describe("", [["A", 2e16], ["B", 1], ["C", 1], ["D", 1]]).short.endsWith("A is the largest segment at more than 99.9%, representing over half of the total."));
+});
+
+test("50b: a whole-number total from 1e21 up, in a value or in the sum, keeps the nearest-double print (the recorded limit)", () => {
+  const totalOf = (pairs) => /• Total: (\S+)/.exec(describe("", pairs).detailed)?.[1];
+  // Each value is below 1e21 but the sum is not: no exact sum is printed, as before.
+  assert.equal(totalOf([["A", 5e20], ["B", 5e20], ["C", 5e20]]), "1500000000000000000000");
+  // A value of 1e21 or more keeps the old print, even when the values cancel to a small sum.
+  assert.equal(totalOf([["A", 1e21], ["B", 1]]), "about", "from rule 52 this total reads about 1000000000000000000000");
+  assert.equal(totalOf([["A", 1e22], ["B", -1e22], ["C", 1]]), "1");
+  // A decimal pie past 2^53 keeps its own rule.
+  assert.equal(totalOf([["A", 2e16], ["B", 1.5]]), "about", "from rule 52 this total reads about 20000000000000000");
+});
+
+test("41a: a whole-number pie above 2^53 rounds each share from the exact sum, so a share a hair under a tie does not read a tenth high", () => {
+  // The sum is 9100000000000001. The largest is 50.0499...% of it (2000 x 4554550000000000 is below 1001 x the sum), so it reads 50.0%.
+  const first = describe("", [["S1", 4554550000000000], ["S2", 4545450000000001]]);
+  assert.ok(first.short.endsWith("S1 is the largest segment at 50.0%, representing about half of the total."));
+  assert.ok(first.detailed.includes("• S1: 4554550000000000 (50.0%)"));
+  // The sum is 9020000000000001, and the largest is below 50.05%.
+  const second = describe("", [["S1", 4514510000000000], ["S2", 4505490000000001]]);
+  assert.ok(second.short.endsWith("S1 is the largest segment at 50.0%, representing about half of the total."));
+  // A share of 33.0...%: 2000 x 4360941109061079 is 624 below 661 x the sum 13194980662817184.
+  const third = describe("", [["S1", 4360941109061079], ["S2", 1226086993763179], ["S3", 7607952559992926]]);
+  assert.ok(third.detailed.includes("• S1: 4360941109061079 (33.0%)"));
+  assert.ok(third.detailed.includes("• S2: 1226086993763179 (9.3%)"));
+  // Controls: the same shape just below 2^53 (the sum is 9000000000000001), and a share a hair over the tie, read as they did.
+  const below = describe("", [["S1", 4504500000000000], ["S2", 4495500000000001]]);
+  assert.ok(below.short.endsWith("S1 is the largest segment at 50.0%, representing about half of the total."));
+  const over = describe("", [["S1", 4554550000000002], ["S2", 4545450000000001]]);
+  assert.ok(over.short.endsWith("S1 is the largest segment at 50.1%, representing over half of the total."));
+});
+
+test("41b: two largest values a few units apart above 2^53 give each its own exact share in the sentence", () => {
+  // The sum is 22656417777160536; the two largest differ by 3 and sit either side of 34.85%.
+  const { short, detailed } = describe("", [
+    ["S1", 7895761595340446], ["S2", 7895761595340449], ["S3", 6085944252366869], ["S4", 778950334112772],
+  ]);
+  assert.ok(short.endsWith("S2 and S1 are the largest segments, about equal, at 34.8% to 34.9% each."));
+  assert.ok(detailed.includes("• S2: 7895761595340449 (34.9%)"));
+  assert.ok(detailed.includes("• S1: 7895761595340446 (34.8%)"));
+});
+
+test("41c: the bottom-half share above 2^53 is worked out from the exact sums", () => {
+  // The sum is 9590333682297856 and the bottom three sum to 2220162247451953; 2000 x that is below 463 x the sum, so the share is 23.1%, not 23.2%.
+  const { detailed } = describe("", [
+    ["S1", 2687954422745105], ["S2", 2403097012228327], ["S3", 2279119999872471],
+    ["S4", 2170870968720410], ["S5", 14307378067169], ["S6", 34983900664374],
+  ]);
+  assert.ok(detailed.includes("The bottom three segments collectively represent 23.1% of the total."));
+  // The sum is 21467724371041029 and the bottom four sum to 9263323066104203, which is 43.1...% of it, not 43.2%. Rounding the bottom
+  // half's own double sum gives 43.2%, so this is the row that pins the exact bottom-half sum.
+  const eight = describe("", [
+    ["S1", 3636046623492012], ["S2", 2810029706498023], ["S3", 2869643237599484], ["S4", 2888681737347307],
+    ["S5", 2109206447552424], ["S6", 1826753120489884], ["S7", 2522444450207986], ["S8", 2804919047853909],
+  ]);
+  assert.ok(eight.detailed.includes("The bottom four segments collectively represent 43.1% of the total."));
+  // A pie below 2^53 reads as before.
+  const small = describe("", [["A", 40], ["B", 30], ["C", 20], ["D", 6], ["E", 3], ["F", 1]]);
+  assert.ok(small.detailed.includes("The bottom three segments collectively represent 10.0% of the total."));
 });
 
 // U+001D and U+007F draw nothing in Chromium, so they read as no name and no title; U+0001 draws a box and stays a name
@@ -935,4 +1009,22 @@ test("a title or a name of only U+001D or U+007F reads as none, and U+0001 is st
     assert.deepEqual(categoryList(lines), ["• Real", "• Unlabelled segment 2", "• Other"], shown);
   }
   assert.ok(describe("\u0001", [["A", 1], ["B", 2]]).short.startsWith("A pie chart titled"));
+});
+
+// Rule 52: a total above 2^53 that the nearest double does not hold reads "about"
+
+test("52a: a total above 2^53 that is not the sum of the values as written reads about, and only then", () => {
+  const totalLine = (pairs) => /• Total: (.+)/.exec(describe("", pairs).detailed)?.[1];
+  // The written sums are 20000000000000001.5, -20000000000000001.5 and 9007199254740993.5; a double holds none of them.
+  assert.equal(totalLine([["A", 2e16], ["B", 1.5]]), "about 20000000000000000");
+  assert.equal(totalLine([["A", -2e16], ["B", -1.5]]), "about -20000000000000000");
+  assert.equal(totalLine([["A", 9007199254740992], ["B", 1.5]]), "about 9007199254740994");
+  // A whole sum from 1e21 up that the double does not hold reads about; one that it holds reads as before.
+  assert.equal(totalLine([["A", 1e21], ["B", 1]]), "about 1000000000000000000000");
+  assert.equal(totalLine([["A", 5e20], ["B", 5e20], ["C", 5e20]]), "1500000000000000000000");
+  // Controls: the exact path, a total that reads 2^53 and not above it, and a decimal pie below 2^53 keep their print.
+  assert.equal(totalLine([["A", 9007199254740993], ["B", 1]]), "9007199254740993");
+  assert.equal(totalLine([["A", 2e16], ["B", 1]]), "20000000000000001");
+  assert.ok(!/about/.test(totalLine([["A", 9007199254740991], ["B", 0.5]])), "a total that reads 2^53 is not above it");
+  assert.ok(!/about/.test(totalLine([["A", 0.1234567890123456], ["B", 1]])), "a decimal total below 2^53 keeps its sixteen-digit limit");
 });
