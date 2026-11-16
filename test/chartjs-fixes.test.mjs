@@ -151,6 +151,19 @@ test("a title that Chart.js does not draw is not described", () => {
   assert.equal(has(simpleBar([1, 2, 3], ["A", "B", "C"], titled("Sales", true))), true);
 });
 
+test("a null row beside points or range rows is a gap, and the config is refused for the kind of its other rows", () => {
+  const reason = (config) => lib.chartjs.describe(config).reason;
+  assert.equal(reason(simpleBar([null, [1, 3], [2, 5]])), "range-data");
+  assert.equal(reason(simpleBar([[1, 3], null, [2, 5]])), "range-data");
+  assert.equal(reason(simpleBar([null, { x: "B", y: 2 }, { x: "C", y: 3 }])), "point-data");
+  assert.equal(reason(simpleBar([{ x: "B", y: 2 }, undefined])), "point-data");
+  const line = { type: "line", data: { datasets: [{ label: "S", data: [{ x: "P", y: 4 }, null] }] } };
+  assert.equal(reason(line), "point-data");
+  // A gap among plain numbers keeps its own reason, and a config that really is malformed is still invalid.
+  assert.equal(reason(simpleBar([1, null, 3])), "null-values");
+  assert.equal(reason({ type: "bar", data: { labels: ["A"], datasets: [null] } }), "invalid-config");
+});
+
 test("a pie with a cutout is a ring and is refused as a doughnut is", () => {
   const DOUGHNUT = { supported: false, reason: "unsupported-type-doughnut" };
   assert.deepEqual(lib.chartjs.describe(simplePie({ options: { cutout: "50%" } })), DOUGHNUT);
@@ -161,6 +174,19 @@ test("a pie with a cutout is a ring and is refused as a doughnut is", () => {
     assert.equal(lib.chartjs.describe(simplePie({ options: { cutout } })).supported, true, String(cutout));
   }
   assert.equal(lib.chartjs.describe(simplePie({ options: { cutout: "50%" } }, [1, 2, 3], { cutout: 0 })).supported, true);
+});
+
+test("a dataset whose data is a string, number or boolean is refused as invalid-config; absent or null data is still no data", () => {
+  const reason = (config) => lib.chartjs.describe(config).reason;
+  for (const data of ["123", "abc", 5, 0, true]) {
+    assert.equal(reason(simpleBar(data)), "invalid-config", JSON.stringify(data));
+    assert.equal(reason(simplePie({}, data)), "invalid-config", JSON.stringify(data));
+  }
+  assert.equal(reason(simpleBar(null)), "no-data");
+  assert.equal(reason(simpleBar(undefined)), "no-data");
+  assert.equal(reason(simpleBar([])), "no-data");
+  // Keyed object data keeps its own reason.
+  assert.equal(reason(simpleBar({ A: 1, B: 2, C: 3 })), "object-data");
 });
 
 test("a title written with a line break is refused as an array title is", () => {
@@ -190,6 +216,16 @@ test("a pie whose values sum within range in the order given but past it high to
   assert.deepEqual(lib.chartjs.describe(pie([1e308, -1e308, 1e308])), NON_FINITE_TOTAL);
   assert.deepEqual(lib.chartjs.describe(pie([1e308, 1e308, -1e308])), NON_FINITE_TOTAL, "the order the adapter already refused");
   assert.equal(lib.chartjs.describe(pie([1e307, -1e307, 1e307])).supported, true, "a sum that stays in range is described");
+});
+
+test("a scales option that is not an object is ignored, as Chart.js ignores it, and so is a scale entry that is not an object", () => {
+  const withScales = (scales) => simpleBar([1, 2, 3], ["A", "B", "C"], { options: { scales } });
+  for (const scales of ["x", "xy", 5, true, null, [], { y: "bad" }, { z: "bad" }, { x: 5, y: [1] }]) {
+    assert.equal(lib.chartjs.describe(withScales(scales)).supported, true, JSON.stringify(scales));
+  }
+  // An entry that is an object still counts: a stacked scale, and a second value axis.
+  assert.deepEqual(lib.chartjs.describe(withScales({ y: { stacked: true } })), { supported: false, reason: "stacked" });
+  assert.deepEqual(lib.chartjs.describe(withScales({ z: { axis: "y" } })), { supported: false, reason: "multiple-value-axes" });
 });
 
 // An empty label is a string Chart.js draws as nothing, so it reads as unlabelled, the same as a label of spaces.
@@ -249,4 +285,17 @@ test("a scale whose stacked option is truthy but not true is refused as stacked,
   // The model flag follows the same test.
   assert.equal(lib.chartjs.toModel(stackedBar("single")).stacked, true);
   assert.equal(lib.chartjs.toModel(stackedBar(0)).stacked, false);
+});
+
+test("a typed array of numbers is a list, as Chart.js draws it, and is described like the array it holds", () => {
+  const reason = (config) => lib.chartjs.describe(config).reason;
+  const same = (make, label) => {
+    assert.deepEqual(lib.chartjs.describe(simpleBar(make([1, 2, 3]))), lib.chartjs.describe(simpleBar([1, 2, 3])), label);
+    assert.deepEqual(lib.chartjs.describe(simplePie({}, make([1, 2, 3]))), lib.chartjs.describe(simplePie({}, [1, 2, 3])), label);
+  };
+  for (const kind of [Float64Array, Float32Array, Int16Array, Int32Array, Uint8Array]) same((values) => kind.from(values), kind.name);
+  assert.equal(lib.chartjs.describe(simpleBar(Float64Array.from([1, 2, 3]))).supported, true);
+  // Keyed object data, and a view that is not a list of numbers, keep their own reason.
+  assert.equal(reason(simpleBar({ A: 1, B: 2, C: 3 })), "object-data");
+  assert.equal(reason(simpleBar(new DataView(new ArrayBuffer(8)))), "object-data");
 });
