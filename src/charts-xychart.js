@@ -324,6 +324,11 @@
   const PADDED_DIGITS_FROM = 1e21;
   // A mean that bands to 0 but is not 0 is spoken to this many significant figures.
   const SMALL_MEAN_FIGURES = 2;
+  // How the takeaway's range sentence opens. The detailed "Average value:" bullet follows that sentence's average where the sentence is printed.
+  const RANGE_SENTENCE_OPENING = "Values range from ";
+  // Beside two typed ends, an average spoken more than this share of the range away from the mean is written to the ends' decimals. A
+  // twentieth is also the furthest the ends' own decimals can leave it in a range ten last-place units wide (0.095 to 0.105).
+  const MEAN_MISPLACED_BEYOND = 1 / 20;
   // Below the smallest normal double a double keeps fewer than 53 bits, so a figure typed back through Number() is a different value.
   const SMALLEST_NORMAL_DOUBLE = 2.2250738585072014e-308;
   // Below this a double (spacing 4.9e-324) is under 200 steps from zero, so it has fewer than three reliable figures and a mean cannot be read from it.
@@ -1165,6 +1170,75 @@
   }
 
   /**
+   * The decimal places a printed range end is written with ("about 0.095" has 3, "12" has 0).
+   * @param {string} written - A printed end, with or without "about "
+   * @returns {number} The decimal places
+   */
+  function printedDecimals(written) {
+    const match = /\.(\d+)$/.exec(written.replace(/^about /, ""));
+    return match === null ? 0 : match[1].length;
+  }
+
+  /**
+   * Whether the magnitude rule's average sits at a different place in a typed range than the mean does. The average is heard as a place
+   * between the two printed ends ("from 0.095 to 0.105 with an average of 0.1" is heard as the middle, and the mean, 0.0975, is a quarter
+   * of the way along). It is misplaced when the spoken figure is more than a twentieth of the range from the mean.
+   * @param {Object} stats - Statistics from computeStatistics
+   * @returns {boolean} True when the average as the magnitude rule speaks it is more than MEAN_MISPLACED_BEYOND of the range from the mean
+   */
+  function isMeanMisplaced(stats) {
+    const width = stats.max - stats.min;
+    if (!Number.isFinite(stats.mean) || !Number.isFinite(width) || width <= 0) return false;
+    const spoken = Number(formatMean(stats.mean, stats.min, stats.max, meanExactOf(stats)));
+    return Math.abs(spoken - stats.mean) > width * MEAN_MISPLACED_BEYOND;
+  }
+
+  /**
+   * The fewest decimals the spoken average may be written to beside a printed range. An end printed "about" is a figure rounded to
+   * its own decimals, so the average beside it is written to at least those decimals: it then reads at the place the rounded range lets
+   * a reader put it. Two ends typed in full keep the magnitude rule, except where that rule misplaces the average (isMeanMisplaced): there
+   * the average is written to at least the decimals of the more precise typed end. Both tiers use this one test.
+   * @param {Object} ends - `{ min, max }` as the sentence prints them
+   * @param {Object} stats - Statistics from computeStatistics
+   * @returns {number} The decimals of the more precise printed end where the floor applies, else 0
+   */
+  function meanFloorDecimals(ends, stats) {
+    const endDecimals = Math.max(printedDecimals(ends.min), printedDecimals(ends.max));
+    if (ends.min.startsWith("about ") || ends.max.startsWith("about ")) return endDecimals;
+    return isMeanMisplaced(stats) ? endDecimals : 0;
+  }
+
+  /**
+   * The average of a single series as a tier speaks it beside that tier's printed range. The takeaway's range sentence and the detailed
+   * tier's "Average value:" bullet both take their figure from here, so the two never disagree.
+   * @param {Object} stats - Statistics from computeStatistics
+   * @param {Object} ends - `{ min, max }` as the tier prints them
+   * @returns {string} The average as it is spoken
+   */
+  function spokenAverage(stats, ends) {
+    const meanBounds = printedMeanBounds(ends, stats);
+    return formatMean(stats.mean, meanBounds.min, meanBounds.max, meanExactOf(stats), meanFloorDecimals(ends, stats));
+  }
+
+  /**
+   * An average written to at least a number of decimals: the magnitude rule's text where that already has them, else the mean at that many
+   * decimals (rounded half away from zero from its exact digits, trailing zeros dropped). A whole-number mean and a mean that is not
+   * finite keep the magnitude rule's text.
+   * @param {string} banded - The mean as formatDerivedValue speaks it
+   * @param {number} mean - The mean of the values
+   * @param {number} floorDecimals - The fewest decimals the average may be written to
+   * @param {Object|null} exact - The exact sum and count the mean was taken from, or null
+   * @returns {string} The mean as text
+   */
+  function atLeastDecimals(banded, mean, floorDecimals, exact) {
+    if (floorDecimals <= 0 || !Number.isFinite(mean) || Number.isInteger(mean) || Math.abs(mean) >= PADDED_DIGITS_FROM) return banded;
+    const bandDecimals = Math.abs(mean) >= 100 ? 0 : Math.abs(mean) >= 10 ? 1 : 2;
+    if (floorDecimals <= bandDecimals) return banded;
+    const written = dropTrailingZeros(fixedDigitsOf(mean, floorDecimals, exact));
+    return written === "-0" ? "0" : written;
+  }
+
+  /**
    * An average as it is spoken, kept inside the range of the values it
    * averages. The magnitude rule can round a mean past an end of the range
    * (the mean of 100.6 and 100.8 is 100.7, and the rule says 101). Where it
@@ -1177,8 +1251,15 @@
    *   rounded from these, half away from zero, and the double is kept for every comparison
    * @returns {string} The mean as it is spoken
    */
-  function formatMean(mean, min, max, exact = null) {
-    const banded = formatDerivedValue(mean, exact);
+  function formatMean(mean, min, max, exact = null, floorDecimals = 0) {
+    // "At least" the floor: an average that already carries that many decimals (a small mean is spoken to two figures) is left as it is.
+    if (floorDecimals > 0) {
+      const withoutFloor = formatMean(mean, min, max, exact);
+      if (printedDecimals(withoutFloor) >= floorDecimals) return withoutFloor;
+    }
+    const bandedByMagnitude = formatDerivedValue(mean, exact);
+    // The average is written to at least the decimals of the printed range ends, rounded half away from zero from the exact mean.
+    const banded = atLeastDecimals(bandedByMagnitude, mean, floorDecimals, exact);
     if (!Number.isFinite(mean) || !Number.isFinite(min) || !Number.isFinite(max)) {
       return banded;
     }
@@ -1202,7 +1283,7 @@
       }
       return banded;
     }
-    for (let decimals = 0; decimals <= MAX_RESTORED_DECIMALS; decimals += 1) {
+    for (let decimals = Math.min(floorDecimals, MAX_RESTORED_DECIMALS); decimals <= MAX_RESTORED_DECIMALS; decimals += 1) {
       const restored = dropTrailingZeros(fixedDigits(mean, decimals, exact));
       if (inside(restored)) return restored;
     }
@@ -2536,11 +2617,10 @@
     const only = series[0];
     const stats = computeStatistics(only.values);
     const ends = formatRangeEndsForTier(tier, stats.min, stats.max);
-    const meanBounds = printedMeanBounds(ends, stats);
-    const meanText = formatMean(stats.mean, meanBounds.min, meanBounds.max, meanExactOf(stats));
+    const meanText = spokenAverage(stats, ends);
     // Only the sentence that speaks the average takes the cleared ends: a line chart's "ranging from" has no average beside it.
     const averageEnds = endsClearOfMean(ends, stats, meanText);
-    const rangeSentence = [text(`Values range from ${averageEnds.min} to ${averageEnds.max} with an average of ${meanText}.`)];
+    const rangeSentence = [text(`${RANGE_SENTENCE_OPENING}${averageEnds.min} to ${averageEnds.max} with an average of ${meanText}.`)];
 
     // THE TEST FOR NO VARIANCE COMES FIRST. A series with no variance cannot be
     // described by a range, a trend or a ratio. The range collapses ("Values
@@ -3117,7 +3197,10 @@
    */
   function buildInsightsModel(chart, wholeChart = chart) {
     const { list, item, strong } = modelCore();
-    const items = [item([strong(buildTakeawayRuns(chart, TIERS.DETAILED))]), ...undrawnValueItems(wholeChart)];
+    const takeawayRuns = buildTakeawayRuns(chart, TIERS.DETAILED);
+    const items = [item([strong(takeawayRuns)]), ...undrawnValueItems(wholeChart)];
+    // Only a takeaway that is the range sentence speaks an average beside the range, and the "Average value:" bullet then repeats that figure.
+    const printsRangeSentence = takeawayRuns.length > 0 && String(takeawayRuns[0].value).startsWith(RANGE_SENTENCE_OPENING);
     const isRangeAxis = !chart.xAxis || chart.xAxis.kind === AXIS_KINDS.RANGE;
 
     if (chart.series.length === 1) {
@@ -3125,7 +3208,7 @@
       if (only.kind === SERIES_KINDS.LINE) {
         items.push(...buildLineInsights(chart, only, isRangeAxis, true));
       } else {
-        items.push(...buildBarInsights(chart, only, true));
+        items.push(...buildBarInsights(chart, only, true, { printsRangeSentence }));
       }
       return list(items);
     }
@@ -3169,9 +3252,10 @@
    * @param {Object} chart - The adapter's chart
    * @param {Object} series - The bar series
    * @param {boolean} isOnlySeries - True when this is the chart's only series
+   * @param {{printsRangeSentence: boolean}} [takeaway] - Whether the takeaway is the range sentence, whose average the bullet then repeats
    * @returns {Array<Object>} List items (model items)
    */
-  function buildBarInsights(chart, series, isOnlySeries) {
+  function buildBarInsights(chart, series, isOnlySeries, takeaway = { printsRangeSentence: false }) {
     const { text, item } = modelCore();
     const stats = computeStatistics(series.values);
     const items = [];
@@ -3201,7 +3285,11 @@
           ])
         );
       }
-      items.push(item([text(`Average value: ${formatMean(stats.mean, stats.min, stats.max, meanExactOf(stats))}.`)]));
+      // Where the takeaway is the range sentence, the bullet speaks the same average; elsewhere it is as it was.
+      const averageText = takeaway.printsRangeSentence
+        ? spokenAverage(stats, formatRangeEndsForTier(TIERS.DETAILED, stats.min, stats.max))
+        : formatMean(stats.mean, stats.min, stats.max, meanExactOf(stats));
+      items.push(item([text(`Average value: ${averageText}.`)]));
 
       if (stats.count >= STATISTICS_MIN_POINTS) {
         items.push(
