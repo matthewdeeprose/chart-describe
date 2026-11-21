@@ -1336,6 +1336,20 @@
   }
 
   /**
+   * The two printed ends of a range with an end that is printed "about" given as typed where the mean lies past that end's figure
+   * ("about 0.01" for 0.01046, with a mean of 0.0101133): the average beside it is then spoken inside the range the sentence prints.
+   * @param {Object} ends - `{ min, max }` as the short tier prints them
+   * @param {Object} stats - Statistics from computeStatistics
+   * @returns {Object} `{ min, max }`, both as text
+   */
+  function endsHoldingMean(ends, stats) {
+    const figure = (written) => Number(written.replace(/^about /, ""));
+    const typedWherePassed = (end, value, passed) => (end.startsWith("about ") && passed(figure(end)) ? formatAuthorValue(value) : end);
+    const typed = { min: typedWherePassed(ends.min, stats.min, (at) => stats.mean < at), max: typedWherePassed(ends.max, stats.max, (at) => stats.mean > at) };
+    return typed.min === ends.min && typed.max === ends.max ? ends : matchTypedEndFigures(stats.min, stats.max, typed);
+  }
+
+  /**
    * A standard deviation as it is spoken. Data that varies never has a spread spoken as zero: decimals are added
    * until a non-zero figure appears. A series with no variance is zero, whatever float noise the mean carries.
    * @param {Object} stats - Statistics from computeStatistics
@@ -2617,9 +2631,10 @@
     const only = series[0];
     const stats = computeStatistics(only.values);
     const ends = formatRangeEndsForTier(tier, stats.min, stats.max);
-    const meanText = spokenAverage(stats, ends);
+    const meanEnds = endsHoldingMean(ends, stats);
+    const meanText = spokenAverage(stats, meanEnds);
     // Only the sentence that speaks the average takes the cleared ends: a line chart's "ranging from" has no average beside it.
-    const averageEnds = endsClearOfMean(ends, stats, meanText);
+    const averageEnds = endsClearOfMean(meanEnds, stats, meanText);
     const rangeSentence = [text(`${RANGE_SENTENCE_OPENING}${averageEnds.min} to ${averageEnds.max} with an average of ${meanText}.`)];
 
     // THE TEST FOR NO VARIANCE COMES FIRST. A series with no variance cannot be

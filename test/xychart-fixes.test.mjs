@@ -1720,3 +1720,32 @@ test('detailed tier: the "Average value:" bullet prints the range sentence\'s av
     assert.ok(lines.includes(`• Average value: ${average}.`), `bullet for ${values}`);
   }
 });
+
+// An average is spoken inside the range the sentence prints: an end the mean passes is printed as typed.
+test("average: a mean that passes an end printed about is spoken inside the range, with that end printed as typed", () => {
+  const short = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).short;
+  assert.ok(short([0.00942,0.01046,0.01046]).includes("Values range from 0.00942 to 0.01046 with an average of 0.01011."));
+  assert.ok(short([-0.00942,-0.01046,-0.01046]).includes("Values range from -0.01046 to -0.00942 with an average of -0.01011."));
+  assert.ok(short([0.10472,0.10251,0.10405,0.09448]).includes("Values range from 0.09448 to 0.10472 with an average of 0.10144."));
+  assert.ok(short([0.094123,0.10449,0.10449,0.10449]).includes("Values range from about 0.09412 to 0.10449 with an average of 0.1019."));
+});
+
+// The short average is chosen after the ends are printed as typed, so two typed ends give the average the ends' decimals.
+test("average: an average beside two ends printed as typed is written to the decimals of those ends", () => {
+  const short = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).short;
+  assert.ok(short([0.04057,0.04057,0.04158]).includes("Values range from 0.04057 to 0.04158 with an average of 0.04091."));
+  assert.ok(short([100.49955,100.50056,100.49962,100.49972]).includes("Values range from 100.49955 to 100.50056 with an average of 100.49986."));
+  assert.ok(short([0.07057,0.07057,0.07158]).includes("Values range from 0.07057 to 0.07158 with an average of 0.07091."));
+  assert.ok(short([0.000942,0.001046,0.001046]).includes("Values range from 0.000942 to 0.001046 with an average of 0.001011."));
+});
+
+// Rows where an average already sits well, and the typed-end rule at its own bound, keep what they printed.
+test("average: an average already inside the range, and an end at the bound of the typed-end rule, keep their wording", () => {
+  const short = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).short;
+  assert.ok(short([1,2,3]).includes("Values range from 1 to 3 with an average of 2."));
+  assert.ok(short([0.095,0.095,0.095,0.105]).includes("Values range from 0.095 to 0.105 with an average of 0.098."));
+  assert.ok(short([0.000947,0.001048]).includes("Values range from about 0.0009 to about 0.001 with an average of 0.000998."));
+  assert.ok(short([1.99331,1.99344]).includes("Values range from about 1.9933 to about 1.9934 with an average of 1.99338."));
+  assert.ok(short([100.2,100.2,100.2,100.4]).includes("Values range from 100.2 to 100.4 with an average of 100.3."));
+  assert.ok(short([0.146,0.1548908]).includes("Values range from 0.146 to about 0.155 with an average of 0.15."));
+});
