@@ -490,7 +490,39 @@
   function dataList(dataset) {
     const data = dataset ? dataset.data : undefined;
     if (Array.isArray(data)) return data;
-    return ArrayBuffer.isView(data) && !(data instanceof DataView) ? Array.from(data) : null;
+    if (!ArrayBuffer.isView(data) || data instanceof DataView) return null;
+    if (!NARROW_FLOAT_ARRAYS.some((kind) => data instanceof kind)) return Array.from(data);
+    return Array.from(data, (value) => shortestStored(value, data.constructor));
+  }
+
+  // Typed arrays that store each number with fewer digits than a double. Float16Array is left out where the runtime has none.
+  const NARROW_FLOAT_ARRAYS = [
+    typeof Float32Array === "function" ? Float32Array : null,
+    typeof Float16Array === "function" ? Float16Array : null,
+  ].filter(Boolean);
+
+  // A double reads back exactly from 17 significant digits, so the search below always ends by then.
+  const MAX_SIGNIFICANT_DIGITS = 17;
+
+  /**
+   * A short decimal that a narrow float array stores as this same element. A Float32Array holds 0.095 as
+   * 0.0949999988079071; read whole, that widened figure would be spoken digit by digit. This rounds the element to
+   * 1, 2, 3 ... significant digits and returns the first rounding that the same kind of array stores as the same
+   * element: 0.095, the number the author put in, whenever it fits the array's precision. Zero (either sign), NaN
+   * and the infinities come back unchanged.
+   * @param {number} value - One element, as the typed array returns it
+   * @param {Function} ArrayKind - The typed array's constructor
+   * @returns {number} The first rounding, by significant digits, that the same kind of array stores as `value`
+   */
+  function shortestStored(value, ArrayKind) {
+    if (value === 0 || !Number.isFinite(value)) return value;
+    const probe = new ArrayKind(1);
+    for (let digits = 1; digits < MAX_SIGNIFICANT_DIGITS; digits++) {
+      const candidate = Number(value.toPrecision(digits));
+      probe[0] = candidate;
+      if (probe[0] === value) return candidate;
+    }
+    return value;
   }
 
   /** True when a dataset's `data` is an object that is not a list: values keyed by name. */

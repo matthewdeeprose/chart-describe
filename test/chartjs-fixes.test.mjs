@@ -299,3 +299,40 @@ test("a typed array of numbers is a list, as Chart.js draws it, and is described
   assert.equal(reason(simpleBar({ A: 1, B: 2, C: 3 })), "object-data");
   assert.equal(reason(simpleBar(new DataView(new ArrayBuffer(8)))), "object-data");
 });
+
+test("a Float32Array reads the decimals the author put in, not the digits single precision adds", () => {
+  const typed = [0.095, 0.095, 0.095, 0.105];
+  const labels = ["A", "B", "C", "D"];
+  const want = lib.chartjs.describe(simpleBar(Float64Array.from(typed), labels));
+  const got = lib.chartjs.describe(simpleBar(Float32Array.from(typed), labels));
+  assert.deepEqual(got, want);
+  assert.match(got.detailed, /Values range from 0\.095 to 0\.105 with an average of 0\.098\./);
+  assert.doesNotMatch(got.detailed, /0\.0949999988079071/);
+  // Float16Array, where the runtime has one, stores fewer digits again and reads the same way.
+  if (typeof Float16Array === "function") {
+    assert.deepEqual(lib.chartjs.describe(simpleBar(Float16Array.from(typed), labels)), want);
+  }
+});
+
+test("a Float32Array element reads back to what the array stores, at every single-precision edge", () => {
+  const values = (data) => lib.chartjs.toModel(simpleBar(Float32Array.from(data), data.map((_, i) => "L" + i))).series[0].values;
+  assert.deepEqual(values([1.401298464324817e-45]), [1e-45]); // the smallest subnormal
+  assert.deepEqual(values([3.4028234663852886e38, -3.4028234663852886e38]), [3.4028235e38, -3.4028235e38]); // the largest float32
+  assert.equal(Object.is(values([-0, 0])[0], -0), true); // -0 keeps its sign
+  assert.equal(Object.is(values([-0, 0])[1], 0), true);
+  // Two doubles that single precision stores as one number read as that one number.
+  assert.deepEqual(values([0.1, 0.10000000149011612]), [0.1, 0.1]);
+  assert.deepEqual(values([16777217]), [16777216]);
+  // Values that are not finite numbers come through unchanged, so the refusal is the same as before.
+  const odd = values([NaN, Infinity]);
+  assert.equal(Number.isNaN(odd[0]), true);
+  assert.equal(odd[1], Infinity);
+  assert.equal(lib.chartjs.describe(simpleBar(Float32Array.from([0.095, NaN, 0.105]))).reason, "non-numeric-values");
+});
+
+test("a Float64Array and the integer typed arrays keep every digit they hold", () => {
+  const values = (data) => lib.chartjs.toModel(simpleBar(data, ["A", "B"])).series[0].values;
+  assert.deepEqual(values(Float64Array.from([0.10000000149011612, 0.0949999988079071])), [0.10000000149011612, 0.0949999988079071]);
+  assert.deepEqual(values(Int32Array.from([16777217, -2147483648])), [16777217, -2147483648]);
+  assert.deepEqual(values(Uint8Array.from([255, 0])), [255, 0]);
+});
