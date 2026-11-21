@@ -262,14 +262,13 @@
     return written;
   }
 
-  // Above 2^53 a double cannot hold a sum that has a fraction, and a longer whole sum may not be held either, so a total that falls back to
-  // the nearest-double print can differ from the sum of the values as written. It then reads "about", as a share that is not exact does.
-  // A total at or below 2^53 is untouched (the sixteen-digit limit above).
-  const ABOUT_TOTAL_ABOVE = 2 ** 53;
+  // A total that falls back to the nearest-double print can differ from the sum of the values as written, at any size: a double above
+  // 2^53 cannot hold a sum that has a fraction, and below it the rounding of cleanTotal drops the digits a longer sum has. It then reads
+  // "about", as a share that is not exact does.
 
   /**
-   * The text of the total: the exact sum when it is short enough to print, otherwise the nearest-double print, led by "about" when the
-   * total is above 2^53 and that print is not the sum of the values as written.
+   * The text of the total: the exact sum when it is short enough to print, otherwise the nearest-double print, led by "about" when that
+   * print is not the sum of the values as written.
    * @param {Array<{value: number}>} segments - The segments
    * @param {number} total - The sum of the values as a double
    * @returns {string} The total as text
@@ -278,20 +277,38 @@
     const exact = exactDecimalTotal(segments);
     if (exact !== null) return exact;
     const printed = formatValue(cleanTotal(total, finestDecimalPlaces(segments)));
-    if (Math.abs(total) <= ABOUT_TOTAL_ABOVE) return printed;
     const written = exactDecimalSum(segments);
     return written !== null && written !== printed ? "about " + printed : printed;
   }
 
   /**
-   * The sum of the values as a BigInt when every value is a safe integer, so a share can be worked out exactly at any total: above
-   * 2^53 the sum of doubles is not the sum. Returns null when any value is not a safe integer.
+   * A value as a BigInt when the digits it prints as are a whole number, so a share of it can be worked out exactly. A double above
+   * 2^53 prints as the shortest digits that read back as it, and those digits are the value the reader sees; a value of 1e21 or more
+   * prints in full (formatValue). Returns null when the value has a fraction or is not finite. A BigInt passes through.
+   * @param {number|bigint} value - The value
+   * @returns {bigint|null} The value as a whole number, or null
+   */
+  function wholeValue(value) {
+    if (typeof value === "bigint") return value;
+    const match = /^-?\d+$/.exec(formatValue(value));
+    return match ? BigInt(match[0]) : null;
+  }
+
+  /**
+   * The sum of the values as a BigInt when every value prints as a whole number, so a share can be worked out exactly at any total:
+   * above 2^53 the sum of doubles is not the sum, and a value above 2^53 is the digits it prints as. Returns null when any value has
+   * a fraction or is not finite.
    * @param {Array<{value: number}>} segments - The segments
    * @returns {bigint|null} The exact sum, or null
    */
   function exactWholeSum(segments) {
-    if (!segments.every((segment) => Number.isSafeInteger(segment.value))) return null;
-    return segments.reduce((running, segment) => running + BigInt(segment.value), 0n);
+    let running = 0n;
+    for (const segment of segments) {
+      const whole = wholeValue(segment.value);
+      if (whole === null) return null;
+      running += whole;
+    }
+    return running;
   }
 
   /**
@@ -358,8 +375,8 @@
   }
 
   /**
-   * A value's share of the total, as a percentage to one decimal place, halves away from zero. A whole number that a double
-   * holds exactly (or a BigInt sum of such numbers) over a whole total has an exact share, so it is worked out exactly: the total
+   * A value's share of the total, as a percentage to one decimal place, halves away from zero. A value that prints as a whole
+   * number (or a BigInt sum of such values) over a whole total has an exact share, so it is worked out exactly: the total
    * is wholeTotal when the caller has the exact sum (exactWholeSum), else the double total when that is a safe integer. Any other
    * share uses the tolerance above.
    * @param {number|bigint} value - The value, or an exact sum of values
@@ -369,7 +386,7 @@
    */
   function roundedShare(value, total, wholeTotal = null) {
     const whole = wholeTotal ?? (Number.isSafeInteger(total) ? BigInt(total) : null);
-    const exact = typeof value === "bigint" ? value : Number.isSafeInteger(value) ? BigInt(value) : null;
+    const exact = wholeValue(value);
     if (whole !== null && exact !== null && whole > 0n && exact >= 0n) {
       return Number((exact * 2000n + whole) / (2n * whole)) / 10;
     }
@@ -380,11 +397,33 @@
    * A percentage as narration: one decimal place, except that a non-zero share
    * which would print as 0.0% reads "less than 0.1%".
    */
-  function formatPercentage(value, total, wholeTotal = null) {
+  function formatPercentage(value, total, wholeTotal = null, exactTotal = null) {
     // Halves round away from zero, as the radar's averages do: 86.1 of 168 is 51.25% and reads 51.3%.
     const text = roundedShare(value, total, wholeTotal).toFixed(1);
     if (value > 0 && text === "0.0") return BELOW_ONE_TENTH;
-    return value < (wholeTotal ?? total) && text === "100.0" ? ABOVE_99_9 : text + "%";
+    // With the exact sum the value is compared as the digits it prints as, so a value above 2^53 is not read as its double.
+    if (text !== "100.0") return text + "%";
+    // A part below the whole never reads 100.0%. The comparison uses the sum of the digits the values print as when there is one,
+    // because the double total can have lost a small second value (1e15 and 0.01).
+    const belowExactly = wholeTotal === null ? decimalIsBelowTotal(value, exactTotal) : null;
+    const belowWhole = belowExactly ?? (wholeTotal === null ? value < total : wholeValue(value) < wholeTotal);
+    return belowWhole ? ABOVE_99_9 : text + "%";
+  }
+
+  /**
+   * A value and the exact decimal total as whole numbers of the finest place either carries, or null when either is not plain digits.
+   * @param {number} value - The segment value
+   * @param {string|null} exactTotal - The sum from exactDecimalSum, or null
+   * @returns {{one: bigint, all: bigint}|null} The two scaled numbers, or null
+   */
+  function scaledAgainstTotal(value, exactTotal) {
+    if (exactTotal === null) return null;
+    const one = /^(\d+)(?:\.(\d+))?$/.exec(formatValue(value));
+    const all = /^(\d+)(?:\.(\d+))?$/.exec(exactTotal);
+    if (!one || !all) return null;
+    const places = Math.max((one[2] || "").length, (all[2] || "").length);
+    const scaled = (match) => BigInt(match[1] + (match[2] || "").padEnd(places, "0"));
+    return { one: scaled(one), all: scaled(all) };
   }
 
   /**
@@ -396,13 +435,20 @@
    * @returns {boolean|null} The exact answer, or null when there is none
    */
   function decimalShareIs(value, exactTotal, denominator) {
-    if (exactTotal === null) return null;
-    const one = /^(\d+)(?:\.(\d+))?$/.exec(formatValue(value));
-    const all = /^(\d+)(?:\.(\d+))?$/.exec(exactTotal);
-    if (!one || !all) return null;
-    const places = Math.max((one[2] || "").length, (all[2] || "").length);
-    const scaled = (match) => BigInt(match[1] + (match[2] || "").padEnd(places, "0"));
-    return scaled(one) * BigInt(denominator) === scaled(all);
+    const pair = scaledAgainstTotal(value, exactTotal);
+    return pair === null ? null : pair.one * BigInt(denominator) === pair.all;
+  }
+
+  /**
+   * True when a value is below the exact decimal total, both worked out from their written digits. Null when either is not plain digits
+   * (or there is no exact total), so the caller keeps the double comparison.
+   * @param {number} value - The segment value
+   * @param {string|null} exactTotal - The sum from exactDecimalSum, or null
+   * @returns {boolean|null} The exact answer, or null when there is none
+   */
+  function decimalIsBelowTotal(value, exactTotal) {
+    const pair = scaledAgainstTotal(value, exactTotal);
+    return pair === null ? null : pair.one < pair.all;
   }
 
   /**
@@ -594,9 +640,9 @@
    * share prints the same; otherwise each member's own share, in the order the group lists them,
    * so no share is given that the member's own data row does not print.
    */
-  function groupPercentages(group, total, each, wholeTotal = null) {
+  function groupPercentages(group, total, each, wholeTotal = null, exactTotal = null) {
     const { text, term } = modelCore();
-    const shares = group.map((segment) => formatPercentage(segment.value, total, wholeTotal));
+    const shares = group.map((segment) => formatPercentage(segment.value, total, wholeTotal, exactTotal));
     if (shares.every((share) => share === shares[0])) {
       return [term("percentage", [text(shares[0])]), ...each];
     }
@@ -608,13 +654,13 @@
    * rows differ, the lowest and the highest printed share ("6.2% to 6.3%"), so the sentence never gives a share that
    * no member's row carries. The group is ordered by the share as rounded, which is what each row prints.
    */
-  function sharedShareRuns(group, total, wholeTotal = null) {
+  function sharedShareRuns(group, total, wholeTotal = null, exactTotal = null) {
     const { text, term } = modelCore();
     const shareOf = (segment) => roundedShare(segment.value, total, wholeTotal);
     const lowest = group.reduce((one, other) => (shareOf(other) < shareOf(one) ? other : one));
     const highest = group.reduce((one, other) => (shareOf(other) > shareOf(one) ? other : one));
-    const low = formatPercentage(lowest.value, total, wholeTotal);
-    const high = formatPercentage(highest.value, total, wholeTotal);
+    const low = formatPercentage(lowest.value, total, wholeTotal, exactTotal);
+    const high = formatPercentage(highest.value, total, wholeTotal, exactTotal);
     if (low === high) return [term("percentage", [text(low)])];
     return [term("percentage", [text(low)]), text(" to "), term("percentage", [text(high)])];
   }
@@ -625,7 +671,7 @@
    * Y (v each, p each)".
    * @returns {Object} A list entry (model item)
    */
-  function extremeItem(kind, label, group, total, same = true, wholeTotal = null) {
+  function extremeItem(kind, label, group, total, same = true, wholeTotal = null, exactTotal = null) {
     const { text, term, item } = modelCore();
     const tied = group.length > 1;
     const each = tied ? [text(" each")] : [];
@@ -643,7 +689,7 @@
         text(" ("),
         ...values,
         text(", "),
-        ...groupPercentages(group, total, each, wholeTotal),
+        ...groupPercentages(group, total, each, wholeTotal, exactTotal),
         text(")"),
       ],
       { role: kind }
@@ -693,8 +739,9 @@
     const ties = readTies(segments);
     const largest = segments[0];
     const wholeTotal = exactWholeSum(segments);
+    const exactTotal = exactDecimalSum(segments);
     const percentage = term("percentage", [
-      text(formatPercentage(largest.value, total, wholeTotal)),
+      text(formatPercentage(largest.value, total, wholeTotal, exactTotal)),
     ]);
 
     // One segment is the whole pie, not the largest of several.
@@ -710,7 +757,7 @@
     if (ties.allEqual) {
       return [
         text(`${allEqualLead(segments.length, ties.largestSame)}, at `),
-        ...sharedShareRuns(segments, total, wholeTotal),
+        ...sharedShareRuns(segments, total, wholeTotal, exactTotal),
         text(" each."),
       ];
     }
@@ -720,12 +767,12 @@
         ...tiedNames(ties.largest),
         // Two values that differ are not one value, so they are not "joint": the same "about equal" the all-equal sentence uses.
         text(ties.largestSame ? " are the joint largest segments, at " : " are the largest segments, about equal, at "),
-        ...sharedShareRuns(ties.largest, total, wholeTotal),
+        ...sharedShareRuns(ties.largest, total, wholeTotal, exactTotal),
         text(" each."),
       ];
     }
 
-    const proportion = proportionPhrase(largest.value, total, exactDecimalSum(segments), wholeTotal);
+    const proportion = proportionPhrase(largest.value, total, exactTotal, wholeTotal);
     return [
       segmentLabel(largest, { opening: true }),
       text(" is the largest segment at "),
@@ -771,8 +818,10 @@
 
     logDebug("Total value across all segments: " + total);
 
-    // The exact sum when every value is a safe integer, so a share is worked out exactly above 2^53 too.
+    // The exact sum when every value prints as a whole number, so a share is worked out exactly above 2^53 too.
     const wholeTotal = exactWholeSum(segments);
+    // The sum of the digits the values print as, whole or decimal, so "the whole" is decided on what is written.
+    const exactTotal = exactDecimalSum(segments);
 
     const titleRuns = hasTitle(title)
       ? [text(' titled "'), term("title", [author(String(title))]), text('"')]
@@ -839,8 +888,8 @@
       const ties = readTies(segments);
       if (!ties.allEqual && segments.length > 1) {
         insightItems.push(
-          extremeItem(PIE_ROLES.LARGEST, "Largest", ties.largest, total, ties.largestSame, wholeTotal),
-          extremeItem(PIE_ROLES.SMALLEST, "Smallest", ties.smallest, total, ties.smallestSame, wholeTotal)
+          extremeItem(PIE_ROLES.LARGEST, "Largest", ties.largest, total, ties.largestSame, wholeTotal, exactTotal),
+          extremeItem(PIE_ROLES.SMALLEST, "Smallest", ties.smallest, total, ties.smallestSame, wholeTotal, exactTotal)
         );
       }
     }
@@ -858,7 +907,7 @@
             ? [
                 text(" ("),
                 term("percentage", [
-                  text(formatPercentage(segment.value, total, wholeTotal)),
+                  text(formatPercentage(segment.value, total, wholeTotal, exactTotal)),
                 ]),
                 text(")"),
               ]
@@ -924,9 +973,9 @@
       const bottomHalfCount = Math.floor(segments.length / 2);
       const bottomHalf = segments.slice(segments.length - bottomHalfCount);
       const bottomHalfTotal = compensatedSum(bottomHalf.map((segment) => segment.value));
-      // With an exact whole total every value is a safe integer, so the bottom half has an exact sum too.
+      // With an exact whole total every value prints as a whole number, so the bottom half has an exact sum too.
       const bottomHalfExact =
-        wholeTotal === null ? bottomHalfTotal : bottomHalf.reduce((running, segment) => running + BigInt(segment.value), 0n);
+        wholeTotal === null ? bottomHalfTotal : bottomHalf.reduce((running, segment) => running + wholeValue(segment.value), 0n);
       const bottomHalfPercentage = formatPercentage(bottomHalfExact, total, wholeTotal);
 
       logDebug(
