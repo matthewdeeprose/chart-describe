@@ -454,9 +454,9 @@ test("14: an empty pie has no segment sentence and no empty data heading", () =>
 
 // Rule 15: values that differ by float noise are tied
 
-test("15a: two values that differ by float noise are tied, not a largest and a smallest", () => {
+test("15a: two values that differ by float noise are tied, not a largest and a smallest, and read about equal", () => {
   const { short, detailed } = describe("", [["A", 0.1 + 0.2], ["B", 0.3]]);
-  assert.ok(short.endsWith("Both segments are equal, at 50.0% each."));
+  assert.ok(short.endsWith("Both segments are about equal, at 50.0% each."));
   assert.ok(!detailed.includes("Largest segment:"));
 });
 
@@ -596,9 +596,9 @@ test("23a: values that differ read about equal, and Key Insights lists each valu
   assert.ok(describe("", [["A", 4000000000004], ["B", 4000000000003], ["C", 4000000000004], ["D", 4000000000004]]).short.endsWith("All four segments are about equal, at 25.0% each."));
 });
 
-test("23b: values that are one value keep equal and each", () => {
-  // The float-noise tie of rule 15, and exact ties, are unchanged.
-  assert.ok(describe("", [["A", 0.1 + 0.2], ["B", 0.3]]).short.endsWith("Both segments are equal, at 50.0% each."));
+test("23b: values that are one value keep equal and each; a float-noise pair reads about equal", () => {
+  // Exact ties are unchanged. The float-noise tie of rule 15 reads about equal, because its two values print differently.
+  assert.ok(describe("", [["A", 0.1 + 0.2], ["B", 0.3]]).short.endsWith("Both segments are about equal, at 50.0% each."));
   assert.ok(describe("", [["A", 40], ["B", 40], ["C", 20]]).detailed.includes("• Largest segments: A and B (40 each, 40.0% each)"));
 });
 
@@ -634,7 +634,7 @@ test("25a: whole numbers that differ read about equal, and their values are list
 
 test("25b: equal whole numbers and a float-noise tie keep equal and each", () => {
   assert.ok(describe("", [["A", 5], ["B", 5], ["C", 5]]).short.endsWith("All three segments are equal, at 33.3% each."));
-  assert.ok(describe("", [["A", 0.1 + 0.2], ["B", 0.3]]).short.endsWith("Both segments are equal, at 50.0% each."));
+  assert.ok(describe("", [["A", 0.1 + 0.2], ["B", 0.3]]).short.endsWith("Both segments are about equal, at 50.0% each."));
 });
 
 // Rule 26: a tie line gives one percentage only when every member's own row prints it
@@ -726,7 +726,8 @@ test("31a: all-equal and joint-largest sentences read a range where the rows dif
   assert.ok(sixteen.short.endsWith("All 16 segments are about equal, at 6.2% to 6.3% each."), sixteen.short);
   assert.ok(sixteen.detailed.includes("• All 16 segments are about equal, at 6.2% to 6.3% each."), sixteen.detailed);
   const joint = describe("", [["Alpha", 2005000000000], ["Bravo", 2004999999999], ["Cedar", 1996666666667], ["Dune", 1996666666667], ["Ember", 1996666666667]]);
-  assert.ok(joint.short.includes("at 20.0% to 20.1% each."), joint.short);
+  // Rule 71p: a tie that names its members gives each member's share in the order of the names, with no "each"; the unnamed sentence above keeps the range.
+  assert.ok(joint.short.endsWith("Alpha and Bravo are the largest segments, about equal, at 20.1% and 20.0%."), joint.short);
 });
 
 test("31b: at the edge the range reads less than 0.1% to 0.1%", () => {
@@ -748,9 +749,9 @@ test("32a: a joint largest of values that differ reads about equal", () => {
   assert.ok(describe("", [["A", 4503599627370496], ["B", 4503599627370495], ["C", 1]]).short.endsWith("A and B are the largest segments, about equal, at 50.0% each."));
 });
 
-test("32b: values that are one value stay joint", () => {
+test("32b: values that are one value stay joint; a float-noise pair is about equal", () => {
   assert.ok(describe("", [["A", 5], ["B", 5], ["C", 3]]).short.endsWith("A and B are the joint largest segments, at 38.5% each."));
-  assert.ok(describe("", [["A", 0.1 + 0.2], ["B", 0.3], ["C", 0.1]]).short.endsWith("A and B are the joint largest segments, at 42.9% each."));
+  assert.ok(describe("", [["A", 0.1 + 0.2], ["B", 0.3], ["C", 0.1]]).short.endsWith("A and B are the largest segments, about equal, at 42.9% each."));
 });
 
 // Rule 33: a total of decimals is the exact sum of the values as written, up to sixteen digits
@@ -1003,7 +1004,7 @@ test("41b: two largest values a few units apart above 2^53 give each its own exa
   const { short, detailed } = describe("", [
     ["S1", 7895761595340446], ["S2", 7895761595340449], ["S3", 6085944252366869], ["S4", 778950334112772],
   ]);
-  assert.ok(short.endsWith("S2 and S1 are the largest segments, about equal, at 34.8% to 34.9% each."));
+  assert.ok(short.endsWith("S2 and S1 are the largest segments, about equal, at 34.9% and 34.8%."));
   assert.ok(detailed.includes("• S2: 7895761595340449 (34.9%)"));
   assert.ok(detailed.includes("• S1: 7895761595340446 (34.8%)"));
 });
@@ -1118,4 +1119,133 @@ test("a total that is not the sum of the values as written reads about at any si
   assert.equal(totalLine([["A", 123456789012.12346], ["B", 1]]), "about 123456789013.123");
   // Controls: a sum of sixteen digits or fewer prints exactly, with no about.
   assert.equal(totalLine([["A", 6821827.4869471], ["B", 6160804.8926784], ["C", 661022.5942687]]), "13643654.9738942");
+});
+
+// Rule 57: "equal" is for values that print as the same digits
+
+test("57b: two values that print differently read about equal, at any size", () => {
+  assert.ok(describe("", [["Aa", 499999999999999.9], ["Bb", 500000000000000.1]]).short.endsWith("Both segments are about equal, at 50.0% each."));
+  assert.ok(describe("", [["Aa", 299999999999999.9], ["Bb", 300000000000000.1]]).short.endsWith("Both segments are about equal, at 50.0% each."));
+  // Three values, two printed alike and one not.
+  assert.ok(describe("", [["Aa", 0.1234567890123456], ["Bb", 0.1234567890123457], ["Cc", 0.1]]).short.includes("are the largest segments, about equal, at"));
+  // Controls: the same digits read equal and each, and a whole-number pair that differs reads about equal as before.
+  assert.ok(describe("", [["Aa", 12.5], ["Bb", 12.5]]).short.endsWith("Both segments are equal, at 50.0% each."));
+  assert.ok(describe("", [["Aa", 299999999999999], ["Bb", 300000000000001]]).short.endsWith("Both segments are about equal, at 50.0% each."));
+});
+
+// Rule 56: a pie with a decimal value works every share out from the digits its values print as
+
+test("56a: a decimal pie rounds a share from the printed digits, so a share a hair under a tie does not read a tenth high", () => {
+  // The sum is 18391932290780 and the larger value is 84.4499...% of it: 84.4%, not 84.5%.
+  const first = describe("", [["Aa", 2859945471216.3], ["Bb", 15531986819563.7]]);
+  assert.ok(first.short.endsWith("Bb is the largest segment at 84.4%, representing over half of the total."));
+  assert.ok(first.detailed.includes("• Bb: 15531986819563.7 (84.4%)"));
+  assert.ok(first.detailed.includes("• Largest segment: Bb (15531986819563.7, 84.4%)"));
+  // The same digits times ten, as whole numbers, read the same.
+  assert.ok(describe("", [["Aa", 28599454712163], ["Bb", 155319868195637]]).detailed.includes("• Bb: 155319868195637 (84.4%)"));
+  // Three more, from a seeded near-tie search: exact 33.2%, 67.6% and 30.6%.
+  assert.ok(describe("", [["Aa", 913807129859.9], ["Bb", 1834484990019.5]]).detailed.includes("• Aa: 913807129859.9 (33.2%)"));
+  assert.ok(describe("", [["Aa", 783176875114.4], ["Bb", 374512518994.1]]).detailed.includes("• Aa: 783176875114.4 (67.6%)"));
+  assert.ok(describe("", [["Aa", 453485018014.9], ["Bb", 1026074583991.3]]).detailed.includes("• Aa: 453485018014.9 (30.6%)"));
+});
+
+test("56b: a small decimal beside two large whole values does not make the shares add to more than 100%", () => {
+  // The exact shares are 68.0% and 31.9%; the doubles read 68.1% and 32.0%.
+  const first = describe("", [["Aa", 84044335461758], ["Bb", 39459463894242], ["Cc", 0.1]]);
+  assert.ok(first.detailed.includes("• Aa: 84044335461758 (68.0%)"));
+  assert.ok(first.detailed.includes("• Bb: 39459463894242 (31.9%)"));
+  // The double total of these loses the 0.4 and is a whole number; the shares are still taken from the digits: 62.1% and 37.8%.
+  const second = describe("", [["Aa", 3028000000000000], ["Bb", 4972000000000000], ["Cc", 0.4]]);
+  assert.ok(second.detailed.includes("• Bb: 4972000000000000 (62.1%)"));
+  assert.ok(second.detailed.includes("• Aa: 3028000000000000 (37.8%)"));
+});
+
+test("56c: the tie sentence and the Largest segments line of a decimal pie read the exact share", () => {
+  // Each of the two largest is 42.2999...% of the sum 160744363804660: 42.3%, not 42.4%.
+  const tie = describe("", [["Aa", 68075238071273.5], ["Bb", 68075238071273.5], ["Cc", 24593887662113]]);
+  assert.ok(tie.short.endsWith("Aa and Bb are the joint largest segments, at 42.3% each."));
+  assert.ok(tie.detailed.includes("• Largest segments: Aa and Bb (68075238071273.5 each, 42.3% each)"));
+});
+
+test("56c2: a tie of two values a unit apart gives the lowest and the highest exact share", () => {
+  // The sum is 133538119536000: the larger value is exactly 48.85% of it, which rounds up to 48.9%, and the other is a hair under, 48.8%.
+  // The sentence gives both, in the order of the names (rule 71p).
+  const pair = describe("", [["Aa", 65233371393335.99], ["Bb", 65233371393336], ["Cc", 3071376749328.01]]);
+  assert.ok(pair.short.endsWith("Bb and Aa are the largest segments, about equal, at 48.9% and 48.8%."));
+  assert.ok(pair.detailed.includes("• Aa: 65233371393335.99 (48.8%)") && pair.detailed.includes("• Bb: 65233371393336 (48.9%)"));
+  assert.ok(pair.detailed.includes("(65233371393336 and 65233371393335.99, 48.9% and 48.8%)"));
+});
+
+test("56d: the bottom-half sentence of a decimal pie is worked out from the exact sums", () => {
+  // The sum is 3380071414024 and the bottom two sum to 1194855044857.483 as printed, 35.3499...% of it: 35.3%, not 35.4%.
+  const bottom = describe("", [
+    ["Aa", 597427622428.738], ["Bb", 597427622428.745], ["Cc", 728405389722.174], ["Dd", 728405389722.169], ["Ee", 728405389722.174],
+  ]);
+  assert.ok(bottom.detailed.includes("The bottom two segments collectively represent 35.3% of the total."));
+  // The sum is 1054436494 and the bottom two sum to 186108041.191 as printed, which is exactly 17.65% of it: a tie, so it reads 17.7%.
+  // Added as doubles the bottom two fall a hair under the tie and would read 17.6%.
+  const noisy = describe("", [
+    ["Aa", 93054020.594], ["Bb", 93054020.597], ["Cc", 289442817.603], ["Dd", 289442817.606], ["Ee", 289442817.6],
+  ]);
+  assert.ok(noisy.detailed.includes("The bottom two segments collectively represent 17.7% of the total."));
+});
+
+test("56e: a decimal pie's proportion phrase follows the printed share", () => {
+  // The larger value is 50.0499...% of the sum: it prints 50.0% and reads about half, not 50.1% and over half.
+  const half = describe("", [["Aa", 2598639850396.513], ["Bb", 2603842332579.487]]);
+  assert.ok(half.short.endsWith("Bb is the largest segment at 50.0%, representing about half of the total."));
+  assert.ok(half.detailed.includes("• Bb: 2603842332579.487 (50.0%)"));
+});
+
+test("56f: a value written with an exponent is read from the digits it prints as", () => {
+  // 1.1e29 prints as 110000000000000000000000000000: Bb is 68.7% of the sum and Cc 31.2%, not 68.8% and 31.3%.
+  const huge = describe("", [["Aa", 30873.342849], ["Bb", 1.1e29], ["Cc", 5e28], ["Dd", 54474817938000]]);
+  assert.ok(huge.detailed.includes("• Bb: 110000000000000000000000000000 (68.7%)"));
+  assert.ok(huge.detailed.includes("• Cc: 50000000000000000000000000000 (31.2%)"));
+  assert.ok(huge.short.endsWith("Bb is the largest segment at 68.7%, representing over half of the total."));
+});
+
+test("56g: ordinary decimal pies read as before", () => {
+  const plain = describe("", [["Aa", 0.1], ["Bb", 0.2], ["Cc", 0.7]]);
+  assert.ok(plain.detailed.includes("• Cc: 0.7 (70.0%)") && plain.detailed.includes("• Aa: 0.1 (10.0%)"));
+  // 86.1 of 168 is 51.25%: a share on a tie still rounds up, with a decimal beside it.
+  assert.ok(describe("", [["Aa", 86.1], ["Bb", 40.2], ["Cc", 41.7]]).detailed.includes("• Aa: 86.1 (51.3%)"));
+  // 0.5 of 1000 is 0.05%, exactly on a tie: it rounds up to 0.1%.
+  assert.ok(describe("", [["Aa", 0.5], ["Bb", 999.5]]).detailed.includes("• Aa: 0.5 (0.1%)"));
+  // Values below 1e-6 print in full and read exactly.
+  const tiny = describe("", [["Aa", 1e-7], ["Bb", 1e-7], ["Cc", 2e-7]]);
+  assert.ok(tiny.detailed.includes("• Cc: 0.0000002 (50.0%)") && tiny.short.endsWith("Cc is the largest segment at 50.0%, representing exactly half of the total."));
+  // A pie with an exponent value that already read correctly is unchanged.
+  assert.ok(describe("", [["Aa", 1.2345678901234567e25], ["Bb", 9.87654321e24]]).detailed.includes("• Aa: 12345678901234566000000000 (55.6%)"));
+});
+
+// Rule 71p: a tie sentence that names its members gives each member's printed share in the order of the names, with no "each", where the rows differ
+
+test("71p-a: a named tie of two whose rows differ gives both shares in the order of the names, with no each", () => {
+  // B (the larger) is named first and printed first: 48.9% and 48.8%, never the range 48.8% to 48.9% each.
+  const pair = describe("", [["A", 65233371393335.99], ["B", 65233371393336], ["C", 3071376749328.01]]);
+  assert.ok(pair.short.endsWith("B and A are the largest segments, about equal, at 48.9% and 48.8%."), pair.short);
+  assert.ok(!pair.short.includes(" each"), pair.short);
+  // The detailed line gives the same two shares in the same order.
+  assert.ok(pair.detailed.includes("• Largest segments: B and A (65233371393336 and 65233371393335.99, 48.9% and 48.8%)"), pair.detailed);
+});
+
+test("71p-b: a named tie of three whose rows differ gives all three shares in the order of the names", () => {
+  // A and C print 20.1% (exactly 20.05% of the sum, rounded half up) and B prints 20.0%.
+  const three = describe("", [["A", 2005000000000], ["B", 2004999999999], ["C", 2005000000000], ["D", 1992500000000], ["E", 1992500000001]]);
+  assert.ok(three.short.endsWith("A, C, and B are the largest segments, about equal, at 20.1%, 20.1%, and 20.0%."), three.short);
+  assert.ok(!three.short.includes(" each"), three.short);
+});
+
+test("71p-c: a named tie whose rows print the same share keeps each", () => {
+  assert.ok(describe("", [["A", 0.1 + 0.2], ["B", 0.3], ["C", 0.1]]).short.endsWith("A and B are the largest segments, about equal, at 42.9% each."));
+  assert.ok(describe("", [["A", 5], ["B", 5], ["C", 3]]).short.endsWith("A and B are the joint largest segments, at 38.5% each."));
+});
+
+test("71p-d: a sentence that names no members, and a tie too long to name them all, keep the range", () => {
+  const sixteen = describe("", segmentsOf(16, (i) => (i === 15 ? 999999999999 : 1000000000000)));
+  assert.ok(sixteen.short.endsWith("All 16 segments are about equal, at 6.2% to 6.3% each."), sixteen.short);
+  // Six members tied: the names are cut to five and a count, so the range stays.
+  const six = describe("", [["A", 1665000000000], ["B", 1664999999999], ["C", 1665000000000], ["D", 1664999999999], ["E", 1665000000000], ["F", 1664999999999], ["G", 10000000002]]);
+  assert.ok(six.short.endsWith("A, C, E, B, D and one more are the largest segments, about equal, at 16.6% to 16.7% each."), six.short);
 });

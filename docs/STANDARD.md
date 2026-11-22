@@ -42,7 +42,9 @@ The pie rules live in `charts-pie.js`. The builder is `buildPieModel`. It also s
 
 **Over half, a third, a quarter.** `proportionPhrase` tests the exact fraction. It writes "exactly half" only when the share is within a tiny tolerance of a half. Above that, it writes "over half". The same rule applies to thirds and quarters. A smaller share gets no phrase.
 
-**Ties.** `readTies` finds equal values at the top and bottom. When two or more segments share the top value, `largestSentence` writes "X and Y are the joint largest segments, at 40.0% each." When every segment is equal, it writes "Both segments are equal" for two segments, or "All four segments are equal" for four. In that case the Key Insights list leaves out the largest and smallest lines, because they would contradict it.
+**Ties.** `readTies` finds equal values at the top and bottom. When two or more segments share the top value, `largestSentence` writes "X and Y are the joint largest segments, at 40.0% each." Where the members' own rows print different shares, the sentence gives each member's share in the order of the names and says no "each": "B and A are the largest segments, about equal, at 48.9% and 48.8%." (`namedTieShareRuns`, which reuses the runs of the Key Insights line). A tie too long to name every member, and the sentence that names none ("All 16 segments are about equal, at 6.2% to 6.3% each."), keep the range of printed shares. When every segment is equal, it writes "Both segments are equal" for two segments, or "All four segments are equal" for four. In that case the Key Insights list leaves out the largest and smallest lines, because they would contradict it.
+
+**What "equal" means.** Two values are equal only when they print as the same digits, which two doubles do only when they are the same double. A pair that differs at all, 0.30000000000000004 beside 0.3 for example, reads "about equal" and each value is listed as it prints. This replaces the earlier rule that read two values as equal when they agreed to fifteen significant digits.
 
 **A single segment.** One segment is not a tie. `readTies` does not call it "all equal".
 
