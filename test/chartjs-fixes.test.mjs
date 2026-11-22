@@ -5,6 +5,7 @@
 // Each test builds a config and checks the exact result.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import vm from "node:vm";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
@@ -317,7 +318,7 @@ test("a Float32Array reads the decimals the author put in, not the digits single
 test("a Float32Array element reads back to what the array stores, at every single-precision edge", () => {
   const values = (data) => lib.chartjs.toModel(simpleBar(Float32Array.from(data), data.map((_, i) => "L" + i))).series[0].values;
   assert.deepEqual(values([1.401298464324817e-45]), [1e-45]); // the smallest subnormal
-  assert.deepEqual(values([3.4028234663852886e38, -3.4028234663852886e38]), [3.4028235e38, -3.4028235e38]); // the largest float32
+  assert.deepEqual(values([3.4028234663852886e38, -3.4028234663852886e38]), [3.4028234663852886e38, -3.4028234663852886e38]); // the largest float32, a whole number, read as held
   assert.equal(Object.is(values([-0, 0])[0], -0), true); // -0 keeps its sign
   assert.equal(Object.is(values([-0, 0])[1], 0), true);
   // Two doubles that single precision stores as one number read as that one number.
@@ -335,4 +336,60 @@ test("a Float64Array and the integer typed arrays keep every digit they hold", (
   assert.deepEqual(values(Float64Array.from([0.10000000149011612, 0.0949999988079071])), [0.10000000149011612, 0.0949999988079071]);
   assert.deepEqual(values(Int32Array.from([16777217, -2147483648])), [16777217, -2147483648]);
   assert.deepEqual(values(Uint8Array.from([255, 0])), [255, 0]);
+});
+
+test("a whole number a narrow float array holds is read as that number, never as a shorter whole number", () => {
+  const values = (data) => lib.chartjs.toModel(simpleBar(data, Array.from(data, (_, i) => "L" + i))).series[0].values;
+  const held = Float32Array.from([33554528, 33554488, 123456792, 2 ** 60 + 2 ** 37]);
+  assert.deepEqual(values(held), Array.from(held));
+  assert.match(lib.chartjs.describe(simpleBar(Float32Array.of(33554528), ["A"])).detailed, /Average value: 33554528\./);
+  // A pie shares out the numbers the array holds, so its total is their sum.
+  assert.deepEqual(lib.chartjs.describe(simplePie({}, Float32Array.of(123456792, 1, 1))), lib.chartjs.describe(simplePie({}, Float64Array.of(123456792, 1, 1))));
+  // A number with a fraction still reads as the shortest decimal the array stores.
+  assert.deepEqual(values(Float32Array.of(0.095, 0.105)), [0.095, 0.105]);
+  if (typeof Float16Array === "function") {
+    const half = Float16Array.from([4112, 4128, 30016, 2050]);
+    assert.deepEqual(values(half), [4112, 4128, 30016, 2050]);
+    assert.match(lib.chartjs.describe(simpleBar(Float16Array.of(4112), ["A"])).detailed, /Average value: 4112\./);
+    assert.deepEqual(values(Float16Array.of(0.095)), [0.095]);
+  }
+});
+
+test("a typed array made in another realm, or by a subclass that rejects a length, reads like one made here", () => {
+  const typed = [0.095, 0.095, 0.095, 0.105];
+  const labels = ["A", "B", "C", "D"];
+  const kinds = ["Float32Array"].concat(typeof Float16Array === "function" ? ["Float16Array"] : []);
+  for (const kind of kinds) {
+    const foreign = vm.runInNewContext("new " + kind + "(" + JSON.stringify(typed) + ")");
+    assert.equal(foreign instanceof globalThis[kind], false, kind + " made by vm is another realm's");
+    const want = lib.chartjs.describe(simpleBar(globalThis[kind].from(typed), labels));
+    assert.deepEqual(lib.chartjs.describe(simpleBar(foreign, labels)), want, kind);
+    assert.match(want.detailed, /Values range from 0\.095 to 0\.105 with an average of 0\.098\./);
+  }
+  assert.deepEqual(
+    lib.chartjs.describe(simplePie({}, vm.runInNewContext("new Float32Array([0.095, 0.2, 0.7])"))),
+    lib.chartjs.describe(simplePie({}, Float64Array.of(0.095, 0.2, 0.7))),
+  );
+  // A view that is not a list of numbers keeps its own reason in another realm too.
+  assert.equal(lib.chartjs.describe(simpleBar(vm.runInNewContext("new DataView(new ArrayBuffer(8))"))).reason, "object-data");
+  // A subclass whose constructor will not take a bare length is still described.
+  class Strict extends Float32Array {
+    constructor(...args) {
+      if (typeof args[0] === "number") throw new TypeError("a Strict array takes values, not a length");
+      super(...args);
+    }
+  }
+  const strict = lib.chartjs.describe(simpleBar(new Strict(typed), labels));
+  assert.equal(strict.supported, true);
+  assert.deepEqual(strict, lib.chartjs.describe(simpleBar(Float32Array.from(typed), labels)));
+});
+
+test("a Float64Array subclass that names itself a Float32Array keeps every digit it holds", () => {
+  class Liar extends Float64Array {
+    get [Symbol.toStringTag]() {
+      return "Float32Array";
+    }
+  }
+  const held = [0.10000000149011612, 0.0949999988079071];
+  assert.deepEqual(lib.chartjs.toModel(simpleBar(new Liar(held), ["A", "B"])).series[0].values, held);
 });
