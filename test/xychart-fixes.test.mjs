@@ -1749,3 +1749,31 @@ test("average: an average already inside the range, and an end at the bound of t
   assert.ok(short([100.2,100.2,100.2,100.4]).includes("Values range from 100.2 to 100.4 with an average of 100.3."));
   assert.ok(short([0.146,0.1548908]).includes("Values range from 0.146 to about 0.155 with an average of 0.15."));
 });
+
+// average: a range printed to 15 decimals still gets an average near the mean (values of about 1e-12)
+test("average: a range printed to 15 decimals still gets an average near the mean (values of about 1e-12)", () => {
+  const short = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).short;
+  assert.ok(short([1.00947e-12,1.01331e-12,1.01328e-12,1.0133e-12,1.01329e-12,1.01328e-12]).includes("Values range from about 0.000000000001009 to about 0.000000000001013 with an average of 0.00000000000101266."));
+  assert.ok(short([-1.00947e-12,-1.01331e-12,-1.01328e-12,-1.0133e-12,-1.01329e-12,-1.01328e-12]).includes("Values range from about -0.000000000001013 to about -0.000000000001009 with an average of -0.00000000000101266."));
+  assert.ok(short([-8.99946e-12,-9.0009e-12,-9.00086e-12,-9.00084e-12,-9.00082e-12]).includes("Values range from about -0.000000000009001 to about -0.000000000008999 with an average of -0.00000000000900058."));
+  const out = describe(chart(band(null, label(6)), [bar("S", [1.00947e-12,1.01331e-12,1.01328e-12,1.0133e-12,1.01329e-12,1.01328e-12])]));
+  assert.ok(out.lines.includes("• Average value: 0.00000000000101266."));
+});
+
+// average: the same digits at other sizes, and an average already at the ends' decimals, keep their wording
+test("average: the same digits at other sizes, and an average already at the ends' decimals, keep their wording", () => {
+  const short = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).short;
+  assert.ok(short([1.00947e-9,1.01331e-9,1.01328e-9,1.0133e-9,1.01329e-9,1.01328e-9]).includes("Values range from about 0.000000001009 to about 0.000000001013 with an average of 0.0000000010127."));
+  assert.ok(short([1.00947e-13,1.01331e-13,1.01328e-13,1.0133e-13,1.01329e-13,1.01328e-13]).includes("Values range from 0.000000000000100947 to 0.000000000000101331 with an average of 0.000000000000101266."));
+  assert.ok(short([1.00947e-12,1.01331e-12]).includes("Values range from about 0.000000000001009 to about 0.000000000001013 with an average of 0.000000000001011."));
+  assert.ok(short([1.00947,1.01331]).includes("Values range from about 1.009 to about 1.013 with an average of 1.011."));
+  assert.ok(short([-0.10069224,-0.099072]).includes("Values range from about -0.101 to about -0.099 with an average of -0.1."));
+  assert.ok(short([0.09776,0.1012534877]).includes("Values range from about 0.098 to about 0.101 with an average of 0.1."));
+  assert.ok(short([2.81118e-9,2.8122e-9,2.81121e-9,2.81121e-9]).includes("Values range from about 0.000000002811 to about 0.000000002812 with an average of 0.0000000028115."));
+});
+
+// A median equal to the top value of a tiny range is spoken in full
+test("median: a median that equals the top value of a range of about 1e-13 is spoken in full", () => {
+  const out = describe(chart(band(null, label(5)), [bar("S", [8.35348e-13,8.35536e-13,8.35535e-13,8.35536e-13,8.35536e-13])]));
+  assert.ok(out.lines.includes("• Median value: 0.000000000000835536."));
+});
