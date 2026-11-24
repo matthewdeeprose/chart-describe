@@ -393,3 +393,86 @@ test("a Float64Array subclass that names itself a Float32Array keeps every digit
   const held = [0.10000000149011612, 0.0949999988079071];
   assert.deepEqual(lib.chartjs.toModel(simpleBar(new Liar(held), ["A", "B"])).series[0].values, held);
 });
+
+test("a typed array whose iterator is replaced is read by its elements, as Chart.js reads it", () => {
+  const values = (data, labels) => lib.chartjs.toModel(simpleBar(data, labels)).series[0].values;
+  const labels = ["A", "B", "C"];
+  const held = [10, 20, 30];
+  const kinds = [Float64Array, Int32Array, Float32Array].concat(typeof Float16Array === "function" ? [Float16Array] : []);
+  for (const kind of kinds) {
+    const want = lib.chartjs.describe(simpleBar(held, labels));
+    assert.equal(want.short, 'A bar chart showing "S" for three categories. Values range from 10 to 30 with an average of 20.');
+    // An iterator set on the array itself.
+    const own = kind.from(held);
+    own[Symbol.iterator] = function* () {
+      yield* [5, 5, 5];
+    };
+    assert.deepEqual(values(own, labels), held, kind.name + " with its own iterator");
+    assert.deepEqual(lib.chartjs.describe(simpleBar(own, labels)), want, kind.name + " with its own iterator");
+    // A subclass that overrides the iterator.
+    class OtherIterator extends kind {
+      *[Symbol.iterator]() {
+        yield* [99, 98, 97];
+      }
+    }
+    assert.deepEqual(lib.chartjs.describe(simpleBar(new OtherIterator(held), labels)), want, kind.name + " subclass");
+    const pie = lib.chartjs.describe(simplePie({}, new OtherIterator(held)));
+    assert.deepEqual(pie, lib.chartjs.describe(simplePie({}, held)), kind.name + " subclass as a pie");
+    assert.equal(pie.short, "A pie chart showing the distribution of three categories. C is the largest segment at 50.0%, representing exactly half of the total.");
+  }
+  // A narrow float array still reads the decimals the author put in, element by element.
+  const narrow = Float32Array.of(0.095, 0.105);
+  narrow[Symbol.iterator] = function* () {
+    yield* [7, 7];
+  };
+  assert.deepEqual(values(narrow, ["A", "B"]), [0.095, 0.105]);
+  // An iterator that throws is never called.
+  const thrower = Float64Array.from(held);
+  thrower[Symbol.iterator] = () => {
+    throw new Error("never walked");
+  };
+  assert.deepEqual(lib.chartjs.describe(simpleBar(thrower, labels)), lib.chartjs.describe(simpleBar(held, labels)));
+});
+
+test("a typed array is read up to its own length, as Chart.js reads it", () => {
+  const values = (data, labels) => lib.chartjs.toModel(simpleBar(data, labels)).series[0].values;
+  const withLength = (data, length) => Object.defineProperty(data, "length", { value: length });
+  const two = lib.chartjs.describe(simpleBar([10, 20], ["A", "B"]));
+  assert.equal(two.short, 'A bar chart showing "S" for two categories. Values range from 10 to 20 with an average of 15.');
+  // Chart.js parses data.length elements, so a length the page has replaced is the number of values drawn.
+  assert.deepEqual(values(withLength(Float64Array.of(10, 20, 30), 2), ["A", "B"]), [10, 20]);
+  assert.deepEqual(lib.chartjs.describe(simpleBar(withLength(Float64Array.of(10, 20, 30), 2), ["A", "B"])), two);
+  assert.deepEqual(values(withLength(Float32Array.of(0.095, 0.105, 0.7), 2), ["A", "B"]), [0.095, 0.105]);
+  class FirstTwo extends Float64Array {
+    get length() {
+      return 2;
+    }
+  }
+  assert.deepEqual(lib.chartjs.describe(simpleBar(new FirstTwo([10, 20, 30]), ["A", "B"])), two);
+  // A length of 0 is no data; a length past the end reads the missing elements as gaps, as an array with holes does.
+  assert.equal(lib.chartjs.describe(simpleBar(withLength(Float64Array.of(10, 20, 30), 0), ["A"])).reason, "no-data");
+  assert.equal(lib.chartjs.describe(simpleBar(withLength(Float64Array.of(10, 20, 30), 5), ["A", "B", "C", "D", "E"])).reason, "null-values");
+  assert.equal(lib.chartjs.describe(simpleBar(withLength(Float32Array.of(10, 20, 30), 5), ["A", "B", "C", "D", "E"])).reason, "null-values");
+});
+
+test("a typed array on a detached buffer is an empty list, so it is no data and not a malformed config", () => {
+  const NO_DATA = { supported: false, reason: "no-data" };
+  for (const kind of [Int16Array, Float64Array, Float32Array]) {
+    const buffer = new ArrayBuffer(16);
+    const data = new kind(buffer);
+    structuredClone(buffer, { transfer: [buffer] });
+    assert.equal(data.length, 0, kind.name + " is detached");
+    assert.deepEqual(lib.chartjs.toModel(simpleBar(data, ["A"])).series[0].values, [], kind.name);
+    assert.deepEqual(lib.chartjs.describe(simpleBar(data, ["A"])), NO_DATA, kind.name);
+    // A pie gets the reason an empty array of the same kind gets.
+    assert.deepEqual(lib.chartjs.describe(simplePie({}, data)), lib.chartjs.describe(simplePie({}, new kind(0))), kind.name + " as a pie");
+    // The same for an array left outside a resizable buffer that has shrunk.
+    if (typeof ArrayBuffer.prototype.resize === "function") {
+      const resizable = new ArrayBuffer(4 * kind.BYTES_PER_ELEMENT, { maxByteLength: 8 * kind.BYTES_PER_ELEMENT });
+      const outside = new kind(resizable, 0, 4);
+      resizable.resize(2 * kind.BYTES_PER_ELEMENT);
+      assert.equal(outside.length, 0, kind.name + " is out of bounds");
+      assert.deepEqual(lib.chartjs.describe(simpleBar(outside, ["A"])), NO_DATA, kind.name + " out of bounds");
+    }
+  }
+});

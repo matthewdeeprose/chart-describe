@@ -495,8 +495,12 @@
     const kind = typedArrayName(data);
     if (kind === undefined) return null; // a DataView
     const store = NARROW_FLOAT_STORES.get(kind);
-    if (!store) return Array.from(data);
-    return Array.from(data, (value) => shortestStored(value, store));
+    // Chart.js reads element 0, 1, 2 and so on up to the array's length, and never walks its iterator. Reading the same way means an iterator
+    // that a subclass or the page has replaced is not described in place of what is drawn. An array on a detached buffer has length 0, so
+    // no element is read and it is an empty list.
+    const length = data.length;
+    if (!store) return Array.from({ length }, (_, index) => data[index]);
+    return Array.from({ length }, (_, index) => shortestStored(data[index], store));
   }
 
   // The built-in getter behind every typed array's Symbol.toStringTag: it reads the internal slot, so a subclass or another realm cannot change the answer,
