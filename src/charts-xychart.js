@@ -1119,6 +1119,8 @@
   function figuresSpoken(value, figures, exact) {
     const written = figuresOf(value, figures, exact);
     if (exact !== null && Math.abs(value) < SMALLEST_NORMAL_DOUBLE) return dropTrailingZeros(written);
+    // A figure written from the exact digits is kept as written: through a double it would be rounded to the double's own digits.
+    if (exact !== null && Math.abs(value) < PADDED_DIGITS_FROM) return dropTrailingZeros(written);
     return numberDigits(Number(written));
   }
 
@@ -1245,6 +1247,29 @@
   }
 
   /**
+   * Two numbers written in digits (an optional minus sign, a whole part and an optional fraction), compared exactly.
+   * @param {string} left - A number in digits
+   * @param {string} right - A number in digits
+   * @returns {number} -1, 0 or 1
+   */
+  function compareDecimalText(left, right) {
+    const parts = (written) => {
+      const [whole, fraction = ""] = written.replace(/^-/, "").split(".");
+      return { negative: written.startsWith("-"), whole, fraction };
+    };
+    const a = parts(left);
+    const b = parts(right);
+    const places = Math.max(a.fraction.length, b.fraction.length);
+    const scaled = (p) => {
+      const units = BigInt(p.whole + p.fraction.padEnd(places, "0"));
+      return p.negative ? -units : units;
+    };
+    const x = scaled(a);
+    const y = scaled(b);
+    return x > y ? 1 : x < y ? -1 : 0;
+  }
+
+  /**
    * An average written to at least a number of decimals: the magnitude rule's text where that already has them, else the mean at that many
    * decimals (rounded half away from zero from its exact digits, trailing zeros dropped). A whole-number mean and a mean that is not
    * finite keep the magnitude rule's text.
@@ -1296,10 +1321,14 @@
     // its exact digits, to two figures.
     if (exact !== null && exact.sum.units !== 0n && Math.abs(mean) < DOUBLE_TOO_COARSE_BELOW) return dropTrailingZeros(figuresOf(mean, SMALL_MEAN_FIGURES, exact));
     const strictlyInside = mean > min && mean < max;
+    // Judged on the decimals, not on Number(text): a figure strictly inside the ends as a decimal can equal an end as a double.
+    const minText = numberDigits(min);
+    const maxText = numberDigits(max);
     const inside = (text) => {
-      const spoken = Number(text);
-      if (strictlyInside && (spoken === min || spoken === max)) return false;
-      return spoken >= min && spoken <= max;
+      const againstMin = compareDecimalText(text, minText);
+      const againstMax = compareDecimalText(text, maxText);
+      if (strictlyInside && (againstMin === 0 || againstMax === 0)) return false;
+      return againstMin >= 0 && againstMax <= 0;
     };
     if (inside(banded)) {
       // A mean that is not zero is never spoken as 0 (the range holds 0, so the search below would stop at it): add decimals until a figure shows.
@@ -1328,6 +1357,34 @@
     // The mean equals an end in doubles and no shorter figure fits between the ends: speak it in full rather than a rounded figure outside the range.
     // (An all-equal series keeps its banded text, as the comment above says.)
     return atAnEnd !== null ? atAnEnd : min === max ? banded : numberDigits(mean);
+  }
+
+  /**
+   * The decimals the magnitude rule writes a derived value to (none from 100, one from 10, two below).
+   * @param {number} value - A computed statistic
+   * @returns {number} The decimals
+   */
+  function magnitudeDecimals(value) {
+    const magnitude = Math.abs(value);
+    return magnitude >= 100 ? 0 : magnitude >= 10 ? 1 : 2;
+  }
+
+  /**
+   * The median as the detailed tier speaks it: the magnitude rule's decimals at the fewest (so the search for a figure inside the range
+   * never settles on a coarser one), and more where the figure is more than MEAN_MISPLACED_BEYOND of the range from the median. The
+   * search starts at the band, so the coarse figure that rounds to -0 is never reached.
+   * @param {Object} stats - Statistics from computeStatistics
+   * @returns {string} The median as it is spoken
+   */
+  function spokenMedian(stats) {
+    let spoken = formatMean(stats.median, stats.min, stats.max, stats.medianExact, magnitudeDecimals(stats.median));
+    const width = stats.max - stats.min;
+    if (stats.medianExact !== null && Number.isFinite(width) && width > 0) {
+      for (let decimals = printedDecimals(spoken) + 1; Math.abs(Number(spoken) - stats.median) > width * MEAN_MISPLACED_BEYOND && decimals <= MAX_DOUBLE_DECIMALS; decimals += 1) {
+        spoken = formatMean(stats.median, stats.min, stats.max, stats.medianExact, decimals);
+      }
+    }
+    return spoken;
   }
 
   /**
@@ -3336,7 +3393,7 @@
         items.push(
           item([text(`Standard deviation: ${formatSpread(stats)}.`)])
         );
-        items.push(item([text(`Median value: ${formatMean(stats.median, stats.min, stats.max, stats.medianExact)}.`)]));
+        items.push(item([text(`Median value: ${spokenMedian(stats)}.`)]));
         items.push(item([text(buildDistributionSentence(stats))]));
       }
       return items;

@@ -972,7 +972,7 @@ test("a mean that is not zero is never spoken as 0 when the range holds zero", (
 
 test("two ends that read as the same figure add decimals until they differ", () => {
   const out = describe(chart(band(null, ["A", "B"]), [bar("S", [1, 1.000000000000001])]));
-  assert.equal(out.short, 'A bar chart showing "S" for two categories. Values range from 1 to 1.000000000000001 with an average of 1.0000000000000004.');
+  assert.equal(out.short, 'A bar chart showing "S" for two categories. Values range from 1 to 1.000000000000001 with an average of 1.0000000000000005.');
   // Just on the other side: ends that differ at the shown figure are untouched.
   assert.ok(describe(chart(band(null, ["A", "B"]), [bar("S", [2.7857142857, 4.8])])).short.includes("from about 2.79 to 4.8"));
 });
@@ -1813,4 +1813,67 @@ test("average: ends typed to 15 or more decimals whose own decimals already hold
   assert.ok(short([-1.5943677e-9,1.5943681e-9,-1.5943677e-9,-1.5943677e-9]).includes("Values range from about -0.0000000016 to about 0.0000000016 with an average of -0.0000000008."));
   const out = describe(chart(band(null, label(6)), [bar("S", [-7.81269e-14,...many(-7.81272e-14, 5)])]));
   assert.ok(out.lines.includes("• Median value: -0.0000000000000781272."));
+});
+
+
+// ---- Round 16: the Median value line keeps a figure the data holds, and an average is not longer or coarser than the digits allow ----
+
+// median: the magnitude figure is kept only while it is within a twentieth of the range from the median (arm A: banded inside the range, far off)
+test("median: a figure that sits more than a twentieth of the range from the median gets decimals until it does not", () => {
+  const median = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).lines.find((text) => text.startsWith("• Median value:"));
+  const many = (value, count) => Array.from({ length: count }, () => value);
+  assert.equal(median([1204.2, 1204.4, 1204.6, 1204.8, 1204.9, 1205.1, 1205.3]), "• Median value: 1204.8.");
+  assert.equal(median([...many(161.65, 5), ...many(162.15, 3)]), "• Median value: 161.65.");
+});
+
+// median: the search for a figure inside the range starts at the magnitude figure's decimals, never at none (arm B)
+test("median: a figure outside the range is not settled by a coarser one", () => {
+  const median = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).lines.find((text) => text.startsWith("• Median value:"));
+  const many = (value, count) => Array.from({ length: count }, () => value);
+  assert.equal(median([...many(0.457, 4), -0.6]), "• Median value: 0.457.");
+  assert.equal(median([...many(-0.377, 4), 0.5, 0.2, 0.6]), "• Median value: -0.377.");
+  assert.equal(median([...many(0.288, 4), -0.88]), "• Median value: 0.288.");
+  assert.equal(median([...many(0.751, 4), 0.822]), "• Median value: 0.751.");
+  assert.equal(median([...many(9.158, 3), 6.556, 6.252]), "• Median value: 9.158.");
+  assert.equal(median([...many(-0.399, 4), 0.327, 0.148, 0.622]), "• Median value: -0.399.");
+  // A wide range still reads a figure the data holds: the coarse 0 is within a twentieth of this range (0.014 of it off), but 0 is not in the data.
+  assert.equal(median([-19.7, ...many(0.288, 4)]), "• Median value: 0.288.");
+});
+
+// median: no number is spoken as -0, and a median that is zero still is
+test("median: no output speaks -0, and a median of zero is still 0", () => {
+  const whole = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).lines.join("\n") + "\n" + describe(chart(band(null, label(values.length)), [bar("S", values)])).short;
+  const many = (value, count) => Array.from({ length: count }, () => value);
+  const loneNegativeZero = /(?<![\d.])-0(?!\.?\d)/;
+  assert.ok(!loneNegativeZero.test(whole([...many(-0.399, 4), 0.327, 0.148, 0.622])));
+  assert.ok(!loneNegativeZero.test(whole([...many(-0.377, 4), 0.5, 0.2, 0.6])));
+  assert.ok(describe(chart(band(null, label(5)), [bar("S", [-2, -1, 0, 1, 2])])).lines.includes("• Median value: 0."));
+});
+
+// median: a magnitude figure that is within a twentieth of the range, and a median that is whole, keep their wording
+test("median: figures within a twentieth of the range and whole medians keep their wording", () => {
+  const median = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).lines.find((text) => text.startsWith("• Median value:"));
+  const many = (value, count) => Array.from({ length: count }, () => value);
+  assert.equal(median([100.2, ...many(100.4, 3), 101.3]), "• Median value: 100.4.");
+  assert.equal(median([90, ...many(100.4, 3), 110]), "• Median value: 100.");
+  assert.equal(median([0, 10, 30.04, 40, 50]), "• Median value: 30.");
+  assert.equal(median([1, 2, 3, 4, 5, 6]), "• Median value: 3.5.");
+  assert.equal(median([10, 20, 30, 40, 50]), "• Median value: 30.");
+});
+
+// average: a figure strictly inside the ends as a decimal is accepted even where a double cannot tell it from an end
+test("average: the shortest figure strictly inside the typed ends is written, judged on the decimals", () => {
+  const out = describe(chart(band(null, label(407)), [bar("S", [0.0300000000002985, ...Array.from({ length: 406 }, () => 0.0300000000002975)])]));
+  assert.ok(out.short.includes("Values range from 0.0300000000002975 to 0.0300000000002985 with an average of 0.030000000000297502."));
+  assert.ok(out.lines.includes("• Average value: 0.030000000000297502."));
+});
+
+// average: a figure written from the exact digits keeps them, so the average is the typed mean and not the double nearest it
+test("average: a figure written from the exact digits is not rounded to the double nearest it", () => {
+  const many = (value, count) => Array.from({ length: count }, () => value);
+  const out = describe(chart(band(null, label(39)), [bar("S", [...many(1.000000000000091, 36), ...many(1.000000000000093, 3)])]));
+  assert.ok(out.short.includes("Values range from 1.000000000000091 to 1.000000000000093 with an average of 1.0000000000000912."));
+  assert.ok(out.lines.includes("• Average value: 1.0000000000000912."));
+  // The mean of 1 and 1.000000000000001 is exactly 1.0000000000000005; the double nearest it prints as 1.0000000000000004, 0.1 of the range low.
+  assert.ok(describe(chart(band(null, ["A", "B"]), [bar("S", [1, 1.000000000000001])])).short.includes("with an average of 1.0000000000000005."));
 });
