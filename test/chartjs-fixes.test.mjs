@@ -298,7 +298,7 @@ test("a typed array of numbers is a list, as Chart.js draws it, and is described
   assert.equal(lib.chartjs.describe(simpleBar(Float64Array.from([1, 2, 3]))).supported, true);
   // Keyed object data, and a view that is not a list of numbers, keep their own reason.
   assert.equal(reason(simpleBar({ A: 1, B: 2, C: 3 })), "object-data");
-  assert.equal(reason(simpleBar(new DataView(new ArrayBuffer(8)))), "object-data");
+  assert.equal(reason(simpleBar(new DataView(new ArrayBuffer(8)))), "no-data");
 });
 
 test("a Float32Array reads the decimals the author put in, not the digits single precision adds", () => {
@@ -370,8 +370,8 @@ test("a typed array made in another realm, or by a subclass that rejects a lengt
     lib.chartjs.describe(simplePie({}, vm.runInNewContext("new Float32Array([0.095, 0.2, 0.7])"))),
     lib.chartjs.describe(simplePie({}, Float64Array.of(0.095, 0.2, 0.7))),
   );
-  // A view that is not a list of numbers keeps its own reason in another realm too.
-  assert.equal(lib.chartjs.describe(simpleBar(vm.runInNewContext("new DataView(new ArrayBuffer(8))"))).reason, "object-data");
+  // A view that is not a list of numbers is no data in another realm too.
+  assert.equal(lib.chartjs.describe(simpleBar(vm.runInNewContext("new DataView(new ArrayBuffer(8))"))).reason, "no-data");
   // A subclass whose constructor will not take a bare length is still described.
   class Strict extends Float32Array {
     constructor(...args) {
@@ -475,4 +475,161 @@ test("a typed array on a detached buffer is an empty list, so it is no data and 
       assert.deepEqual(lib.chartjs.describe(simpleBar(outside, ["A"])), NO_DATA, kind.name + " out of bounds");
     }
   }
+});
+
+// CD-81a: the picks: pb + ma (shared) + kb + da
+
+test("a plain array whose iterator is replaced is read by its elements, as Chart.js reads it", () => {
+  const held = [4, 5, 6, 7];
+  const labels = ["A", "B", "C", "D"];
+  const own = held.slice();
+  own[Symbol.iterator] = function* () {
+    yield 1;
+    yield 1;
+  };
+  for (const type of ["bar", "line"]) {
+    const want = lib.chartjs.describe(simpleBar(held.slice(), labels, { type }));
+    assert.equal(want.supported, true, type);
+    assert.deepEqual(lib.chartjs.toModel(simpleBar(own, labels, { type })).series[0].values, held, type);
+    assert.deepEqual(lib.chartjs.describe(simpleBar(own, labels, { type })), want, type);
+  }
+  // An iterator that throws is never called.
+  const thrower = held.slice();
+  thrower[Symbol.iterator] = () => {
+    throw new Error("never walked");
+  };
+  assert.deepEqual(lib.chartjs.describe(simpleBar(thrower, labels)), lib.chartjs.describe(simpleBar(held.slice(), labels)));
+});
+
+test("a plain array whose iterator is replaced is the same pie as the array it holds, and is not refused for a length it does not have", () => {
+  const held = [10, 20, 30];
+  const own = held.slice();
+  own[Symbol.iterator] = function* () {
+    yield 99;
+  };
+  const want = lib.chartjs.describe(simplePie({}, held.slice()));
+  assert.equal(want.supported, true);
+  assert.deepEqual(lib.chartjs.describe(simplePie({}, own)), want);
+});
+
+test("a plain array whose methods are replaced is read by its elements, as Chart.js reads it", () => {
+  const held = [4, 5, 6, 7];
+  const labels = ["A", "B", "C", "D"];
+  const want = lib.chartjs.describe(simpleBar(held.slice(), labels));
+  assert.equal(want.supported, true);
+  // Chart.js never calls find, filter, some, map, slice or forEach on the data, so replacing them draws nothing different.
+  const replaced = held.slice();
+  replaced.find = () => ({ x: 1, y: 2 });
+  replaced.filter = () => [];
+  replaced.some = () => true;
+  replaced.map = () => [];
+  replaced.slice = () => [];
+  replaced.forEach = () => {};
+  assert.deepEqual(lib.chartjs.describe(simpleBar(replaced, labels)), want);
+  assert.deepEqual(lib.chartjs.describe(simpleBar(replaced, labels, { type: "line" })), lib.chartjs.describe(simpleBar(held.slice(), labels, { type: "line" })));
+});
+
+test("a typed array whose length Chart.js cannot allocate is refused, and one it reads as empty is no data", () => {
+  const labels = ["A", "B", "C", "D"];
+  const withLength = (value) => {
+    const data = Uint8Array.of(9, 8, 7, 6);
+    Object.defineProperty(data, "length", { get: () => value });
+    return data;
+  };
+  const REFUSED = { supported: false, reason: "invalid-config" };
+  // Chart.js throws "Invalid array length" for a length with a fraction and for one past the largest array, and draws nothing.
+  for (const length of [0.5, 2.5, 3.5, 3.0000000001, Infinity, 2 ** 32, 1e10]) {
+    assert.deepEqual(lib.chartjs.describe(simpleBar(withLength(length), labels)), REFUSED, "bar " + length);
+    assert.deepEqual(lib.chartjs.describe(simpleBar(withLength(length), labels, { type: "line" })), REFUSED, "line " + length);
+    assert.deepEqual(lib.chartjs.describe(simplePie({}, withLength(length))), REFUSED, "pie " + length);
+  }
+  assert.deepEqual(lib.chartjs.describe(simpleBar(withLength(2n), labels)), { supported: false, reason: "invalid-config" }, "a BigInt length");
+  // It parses a length that is not a number, or is below zero, as an empty list, and a numeric string as its number.
+  const NO_DATA = { supported: false, reason: "no-data" };
+  for (const length of [0, -1, -0.5, -Infinity, NaN, "abc", undefined, null]) {
+    assert.deepEqual(lib.chartjs.describe(simpleBar(withLength(length), labels)), NO_DATA, "bar " + String(length));
+  }
+  assert.deepEqual(lib.chartjs.toModel(simpleBar(withLength("2"), ["A", "B"])).series[0].values, [9, 8]);
+  assert.deepEqual(lib.chartjs.toModel(simpleBar(withLength(true), ["A"])).series[0].values, [9]);
+  // A whole length, even a long one, is read as before.
+  assert.equal(lib.chartjs.describe(simpleBar(withLength(4), labels)).supported, true);
+  assert.equal(lib.chartjs.describe(simpleBar(withLength(5), ["A", "B", "C", "D", "E"])).reason, "null-values");
+  // A plain array behind a Proxy is held to the same length.
+  const proxied = new Proxy([4, 5, 6, 7], { get: (target, key) => (key === "length" ? 2.5 : target[key]) });
+  assert.deepEqual(lib.chartjs.describe(simpleBar(proxied, labels)), REFUSED, "a Proxy around an array");
+});
+
+test("a typed array that Object.prototype.toString calls an object is keyed data, as Chart.js reads it, and is refused as object-data", () => {
+  const OBJECT_DATA = { supported: false, reason: "object-data" };
+  const labels = ["Jan", "Feb", "Mar", "Apr"];
+  const own = Uint16Array.of(2, 9, 4, 1);
+  Object.defineProperty(own, Symbol.toStringTag, { value: "Object" });
+  class Tagged extends Float64Array {
+    get [Symbol.toStringTag]() {
+      return "Object";
+    }
+  }
+  const nullPrototype = Uint16Array.of(2, 9, 4, 1);
+  Object.setPrototypeOf(nullPrototype, null);
+  const arrayPrototype = Uint16Array.of(2, 9, 4, 1);
+  Object.setPrototypeOf(arrayPrototype, Array.prototype);
+  const cases = { "an own tag": own, "a subclass whose tag is Object": new Tagged([2, 9, 4, 1]), "no prototype": nullPrototype, "Array.prototype as prototype": arrayPrototype };
+  for (const [name, data] of Object.entries(cases)) {
+    assert.deepEqual(lib.chartjs.describe(simpleBar(data, labels)), OBJECT_DATA, "bar, " + name);
+    assert.deepEqual(lib.chartjs.describe(simpleBar(data, labels, { type: "line" })), OBJECT_DATA, "line, " + name);
+    assert.deepEqual(lib.chartjs.describe(simplePie({}, data)), OBJECT_DATA, "pie, " + name);
+  }
+});
+
+test("a typed array with another tag, from another realm or on a shared buffer is still a list", () => {
+  const labels = ["Jan", "Feb", "Mar", "Apr"];
+  const held = [2, 9, 4, 1];
+  const want = lib.chartjs.describe(simpleBar(held.slice(), labels));
+  assert.equal(want.supported, true);
+  class Other extends Float64Array {
+    get [Symbol.toStringTag]() {
+      return "Other";
+    }
+  }
+  const shared = new Float64Array(new SharedArrayBuffer(32));
+  shared.set(held);
+  const forms = {
+    "a subclass with another tag": new Other(held),
+    "another realm": vm.runInNewContext("new Float64Array([2, 9, 4, 1])"),
+    "a shared buffer": shared,
+    "a Uint16Array": Uint16Array.from(held),
+  };
+  for (const [name, data] of Object.entries(forms)) {
+    assert.deepEqual(lib.chartjs.describe(simpleBar(data, labels)), want, name);
+  }
+});
+
+test("a plain array that Object.prototype.toString calls an object is keyed data too, as Chart.js reads it", () => {
+  const OBJECT_DATA = { supported: false, reason: "object-data" };
+  const labels = ["Jan", "Feb", "Mar", "Apr"];
+  const own = [2, 9, 4, 1];
+  Object.defineProperty(own, Symbol.toStringTag, { value: "Object" });
+  class Tagged extends Array {
+    get [Symbol.toStringTag]() {
+      return "Object";
+    }
+  }
+  assert.deepEqual(lib.chartjs.describe(simpleBar(own, labels)), OBJECT_DATA, "an own tag");
+  assert.deepEqual(lib.chartjs.describe(simpleBar(Tagged.from([2, 9, 4, 1]), labels)), OBJECT_DATA, "a subclass whose tag is Object");
+  // Another tag, or none, leaves an array a list.
+  const other = [2, 9, 4, 1];
+  Object.defineProperty(other, Symbol.toStringTag, { value: "Other" });
+  assert.deepEqual(lib.chartjs.describe(simpleBar(other, labels)), lib.chartjs.describe(simpleBar([2, 9, 4, 1], labels)));
+});
+
+test("a DataView holds no element Chart.js can read, so it is no data, not object data", () => {
+  const view = new DataView(new ArrayBuffer(32));
+  assert.deepEqual(lib.chartjs.describe(simpleBar(view, ["A", "B", "C"])), { supported: false, reason: "no-data" });
+  assert.deepEqual(lib.chartjs.describe(simpleBar(vm.runInNewContext("new DataView(new ArrayBuffer(32))"), ["A", "B", "C"])), { supported: false, reason: "no-data" }, "another realm");
+  // A pie gets the reason an empty array gets.
+  assert.deepEqual(lib.chartjs.describe(simplePie({}, view)), lib.chartjs.describe(simplePie({}, [])));
+  // A view given a length Chart.js can read is read up to it: three gaps.
+  const counted = new DataView(new ArrayBuffer(32));
+  Object.defineProperty(counted, "length", { value: 3 });
+  assert.deepEqual(lib.chartjs.describe(simpleBar(counted, ["A", "B", "C"])), { supported: false, reason: "null-values" });
 });
