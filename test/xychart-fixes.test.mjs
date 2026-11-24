@@ -1777,3 +1777,40 @@ test("median: a median that equals the top value of a range of about 1e-13 is sp
   const out = describe(chart(band(null, label(5)), [bar("S", [8.35348e-13,8.35536e-13,8.35535e-13,8.35536e-13,8.35536e-13])]));
   assert.ok(out.lines.includes("• Median value: 0.000000000000835536."));
 });
+
+// average: typed ends of 15 or more decimals still get an average near the mean (values of about 1e-9 with eight figures, or 1e-12 with four)
+test("average: typed ends of 15 or more decimals still get an average near the mean", () => {
+  const short = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).short;
+  const many = (value, count) => Array.from({ length: count }, () => value);
+  assert.ok(short([1.5943677e-9,1.5943681e-9,1.5943677e-9,1.5943677e-9,1.59436771e-9,1.5943677e-9,1.5943677e-9,1.5943677e-9,1.59436771e-9,1.5943677e-9]).includes("Values range from 0.0000000015943677 to 0.0000000015943681 with an average of 0.00000000159436774."));
+  assert.ok(short([-5.395399e-11,...many(-5.395402e-11, 8),-5.395401e-11]).includes("Values range from -0.00000000005395402 to -0.00000000005395399 with an average of -0.000000000053954016."));
+  assert.ok(short([-7.81269e-14,...many(-7.81272e-14, 5)]).includes("Values range from -0.0000000000000781272 to -0.0000000000000781269 with an average of -0.00000000000007812715."));
+  assert.ok(short([1.268e-12,1.2706e-12,...many(1.271e-12, 6)]).includes("Values range from 0.000000000001268 to 0.000000000001271 with an average of 0.0000000000012706."));
+  assert.ok(short([6.329e-13,6.3316e-13,...many(6.332e-13, 5)]).includes("Values range from 0.0000000000006329 to 0.0000000000006332 with an average of 0.00000000000063315."));
+  const out = describe(chart(band(null, label(10)), [bar("S", [1.5943677e-9,1.5943681e-9,1.5943677e-9,1.5943677e-9,1.59436771e-9,1.5943677e-9,1.5943677e-9,1.5943677e-9,1.59436771e-9,1.5943677e-9])]));
+  assert.ok(out.lines.some((text) => text.includes("Values range from 0.0000000015943677 to 0.0000000015943681 with an average of 0.00000000159436774.")));
+  assert.ok(out.lines.includes("• Average value: 0.00000000159436774."));
+});
+
+// average: a mean within a hundredth of the range of a typed end is written until it is inside the range (one decimal past the ends still reads as the end)
+test("average: a mean within a hundredth of the range of a typed end is written until it is inside the range", () => {
+  const short = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).short;
+  const many = (value, count) => Array.from({ length: count }, () => value);
+  assert.ok(short([...many(1.5943677e-9, 99),1.5943681e-9]).includes("Values range from 0.0000000015943677 to 0.0000000015943681 with an average of 0.000000001594367704."));
+  assert.ok(short([1.5943677e-9,...many(1.5943681e-9, 99)]).includes("Values range from 0.0000000015943677 to 0.0000000015943681 with an average of 0.000000001594368096."));
+  assert.ok(short([...many(1.268e-12, 99),1.271e-12]).includes("Values range from 0.000000000001268 to 0.000000000001271 with an average of 0.00000000000126803."));
+});
+
+// average: ends typed to 15 or more decimals whose own decimals already hold the average, and a median beside them, keep their wording
+test("average: ends typed to 15 or more decimals whose own decimals already hold the average, and a median beside them, keep their wording", () => {
+  const short = (values) => describe(chart(band(null, label(values.length)), [bar("S", values)])).short;
+  const many = (value, count) => Array.from({ length: count }, () => value);
+  assert.ok(short([1.5943677e-9,1.5943681e-9,1.5943679e-9]).includes("Values range from 0.0000000015943677 to 0.0000000015943681 with an average of 0.0000000015943679."));
+  assert.ok(short([1.5943677e-9,1.5943681e-9]).includes("Values range from 0.0000000015943677 to 0.0000000015943681 with an average of 0.0000000015943679."));
+  assert.ok(short([1.268e-12,1.271e-12]).includes("Values range from 0.000000000001268 to 0.000000000001271 with an average of 0.00000000000127."));
+  assert.ok(short([...many(1.26e-12, 29),1.27e-12]).includes("Values range from 0.00000000000126 to 0.00000000000127 with an average of 0.0000000000012603."));
+  assert.ok(short([-2e-17,3e-17,...many(-2e-17, 28)]).includes("Values range from -0.00000000000000002 to 0.00000000000000003 with an average of -0.000000000000000018."));
+  assert.ok(short([-1.5943677e-9,1.5943681e-9,-1.5943677e-9,-1.5943677e-9]).includes("Values range from about -0.0000000016 to about 0.0000000016 with an average of -0.0000000008."));
+  const out = describe(chart(band(null, label(6)), [bar("S", [-7.81269e-14,...many(-7.81272e-14, 5)])]));
+  assert.ok(out.lines.includes("• Median value: -0.0000000000000781272."));
+});

@@ -1227,7 +1227,8 @@
     if (!Number.isFinite(stats.mean) || !Number.isFinite(width) || width <= 0) return spoken;
     if (Math.abs(Number(spoken) - stats.mean) <= width * MEAN_MISPLACED_BEYOND) return spoken;
     const typedDecimals = Math.max(printedDecimals(formatAuthorValue(stats.min)), printedDecimals(formatAuthorValue(stats.max)));
-    return formatMean(stats.mean, stats.min, stats.max, meanExactOf(stats), typedDecimals);
+    // The search for a figure strictly inside the typed ends runs past 15 decimals here (ends typed to 15 or more decimals leave it nothing sooner).
+    return formatMean(stats.mean, stats.min, stats.max, meanExactOf(stats), typedDecimals, MAX_DOUBLE_DECIMALS);
   }
 
   /**
@@ -1272,9 +1273,11 @@
    * @param {number} max - The highest value
    * @param {Object|null} exact - The exact sum and count the mean was taken from, or null (a value that is not finite): the figures are
    *   rounded from these, half away from zero, and the double is kept for every comparison
+   * @param {number} [floorDecimals] - The fewest decimals the average may be written to (0 for none)
+   * @param {number} [restoreTo] - The most decimals the search for a figure strictly inside the range may run to
    * @returns {string} The mean as it is spoken
    */
-  function formatMean(mean, min, max, exact = null, floorDecimals = 0) {
+  function formatMean(mean, min, max, exact = null, floorDecimals = 0, restoreTo = MAX_RESTORED_DECIMALS) {
     // "At least" the floor: an average that already carries that many decimals (a small mean is spoken to two figures) is left as it is.
     if (floorDecimals > 0) {
       const withoutFloor = formatMean(mean, min, max, exact);
@@ -1306,7 +1309,7 @@
       }
       return banded;
     }
-    for (let decimals = Math.min(floorDecimals, MAX_RESTORED_DECIMALS); decimals <= MAX_RESTORED_DECIMALS; decimals += 1) {
+    for (let decimals = Math.min(floorDecimals, restoreTo); decimals <= restoreTo; decimals += 1) {
       const restored = dropTrailingZeros(fixedDigits(mean, decimals, exact));
       if (inside(restored)) return restored;
     }
