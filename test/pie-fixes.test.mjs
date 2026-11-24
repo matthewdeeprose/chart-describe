@@ -1249,3 +1249,35 @@ test("71p-d: a sentence that names no members, and a tie too long to name them a
   const six = describe("", [["A", 1665000000000], ["B", 1664999999999], ["C", 1665000000000], ["D", 1664999999999], ["E", 1665000000000], ["F", 1664999999999], ["G", 10000000002]]);
   assert.ok(six.short.endsWith("A, C, E, B, D and one more are the largest segments, about equal, at 16.6% to 16.7% each."), six.short);
 });
+
+// Rule 76p: the cut between a tie that names every member and a tie whose names are cut sits between five and six members
+
+test("76p-a: a tie of exactly five names whose rows differ gives all five shares, with no range and no \"each\"", () => {
+  // Three members at 19.15% of the sum (printed 19.2%) and two a unit lower (printed 19.1%); the total is 1e13.
+  const five = describe("", [["A", 1915000000000], ["B", 1915000000000], ["C", 1915000000000], ["D", 1914999999999], ["E", 1914999999999], ["F", 425000000002]]);
+  const sentence = "A, B, C, D, and E are the largest segments, about equal, at 19.2%, 19.2%, 19.2%, 19.1%, and 19.1%.";
+  assert.ok(five.short.endsWith(sentence), five.short);
+  assert.ok(five.detailed.includes("• " + sentence), five.detailed);
+  assert.ok(!five.short.includes(" each") && !five.short.includes(" more"), five.short);
+});
+
+test("76p-b: a tie of exactly six names whose rows differ cuts the names to five and a count, and keeps the range", () => {
+  // Three members at 16.65% (printed 16.7%) and three a unit lower (printed 16.6%).
+  const six = describe("", [["A", 1665000000000], ["B", 1665000000000], ["C", 1665000000000], ["D", 1664999999999], ["E", 1664999999999], ["F", 1664999999999], ["G", 10000000003]]);
+  const sentence = "A, B, C, D, E and one more are the largest segments, about equal, at 16.6% to 16.7% each.";
+  assert.ok(six.short.endsWith(sentence), six.short);
+  assert.ok(six.detailed.includes("• " + sentence), six.detailed);
+  // The Largest segments line still names all six.
+  assert.ok(six.detailed.includes("• Largest segments: A, B, C, D, E, and F ("), six.detailed);
+});
+
+test("76p-c: a tie of exactly five equal values names all five, and a tie of exactly six is cut, in both tiers", () => {
+  const five = describe("", [["A", 766], ["B", 766], ["C", 766], ["D", 766], ["E", 766], ["F", 170]]);
+  const fiveSentence = "A, B, C, D, and E are the joint largest segments, at 19.2% each.";
+  assert.ok(five.short.endsWith(fiveSentence), five.short);
+  assert.ok(five.detailed.includes("• " + fiveSentence), five.detailed);
+  const six = describe("", [["A", 602], ["B", 602], ["C", 602], ["D", 602], ["E", 602], ["F", 602], ["G", 388]]);
+  const sixSentence = "A, B, C, D, E and one more are the joint largest segments, at 15.1% each.";
+  assert.ok(six.short.endsWith(sixSentence), six.short);
+  assert.ok(six.detailed.includes("• " + sixSentence), six.detailed);
+});
